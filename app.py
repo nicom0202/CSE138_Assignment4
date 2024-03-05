@@ -2,6 +2,8 @@ from flask import Flask, make_response, jsonify, request
 import requests
 import os
 import time
+import hashlib
+
 app = Flask(__name__)
 
 
@@ -271,14 +273,14 @@ def update_vector_clock():
 
 def dependency_test_client(VC2): #NOTE: VC2 is the vector_clock of the requesting client
     # Get globals
-    global vector_clock, view_list
+    global vector_clock, shard_groups, shard_number
     VC1 = vector_clock.copy()
 
     # check if VC2 is empty
     if VC2 is None:
         return True
     # Only compare addresses in view list (NOTE: We're not deleting vc info on replicas that are down)
-    for address in view_list:
+    for address in shard_groups[shard_number][:]:
         if address in VC2:
             if VC1[address] < VC2[address]:
                 return False
@@ -295,7 +297,7 @@ def dependency_test_replica(VC2, sender): #NOTE: VC2 is the vector_clock of the 
         return False
     
     # Check that the sender vc knows the same amount of writes as you
-    for key in view_list:
+    for key in shard_groups[shard_number][:]:
         if key in VC2:
             if key != sender and VC2[key] > VC1[key]:
                 return False
@@ -334,6 +336,33 @@ def merge_vector_clocks(VC2):
 
 
 
+# ================================================================================================================
+# ----------------------------------------------------------------------------------------------------------------
+# HELPER FUNCTIONS:            CONSISTENT HASHING
+#                                                   TODO: FIX CONSISTENT HASHING FUNCTIONS, THEY DON'T WORK
+# ----------------------------------------------------------------------------------------------------------------
+# ================================================================================================================
+
+
+def consistent_hash(key, shard_count):
+    hashed_key = _hash_key(key)
+    shard = _find_shard(hashed_key, shard_count)
+    return shard
+
+def _hash_key(key):
+    # Use MD5 hash function for consistent hashing
+    return int(hashlib.md5(key.encode()).hexdigest(), 16)
+
+def _find_shard(hashed_key, shard_count):
+    # Calculate the shard number using modulo operation
+    shard = hashed_key % shard_count
+    return shard
+
+
+
+
+
+
 
 
 
@@ -344,7 +373,6 @@ def merge_vector_clocks(VC2):
 # HELPER FUNCTIONS:            BROADCASTING KVS UPDATES WITHIN SHARD GROUPS
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
-
 
 # This function will broadcast to everyone in your shard group to PUT a key:value into the key-value-store
 def broadcast_kvs_put(key, value):
@@ -374,7 +402,7 @@ def broadcast_kvs_put(key, value):
                     
                     # Unexpected behavior
                     else:
-                        raise Exception
+                        print(f"Unexpected behavior, status code: {response.status_code}")
                 except requests.RequestException:
                     # Found down replica, delete from view list & add to down_replicas
                     if replica in view_list and replica != my_socket_address:
@@ -442,46 +470,27 @@ def broadcast_kvs_delete(key):
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#                  /kvs/<key> endpoint     NOTE: THIS ACTS AS A PROXY (RESPONSIBLE FOR FORWARDING TO CORRECT REPLICA)
+#                  /replica/kvs/<key> endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
 
-@app.route('/kvs/<key>', methods=['PUT', 'GET', 'DELETE'])
-def proxy_forward(key):
-    # Get globals
-    global shard_count, shard_number
+#          ~~~~~~~~~~~~~~~~~~~~~
+#          ~~~~~ PUT logic ~~~~~
+#          ~~~~~~~~~~~~~~~~~~~~~
+@app.route('/kvs/<key>', methods=['PUT'])
+def put_key_value(key):
+    # Get global
+    global key_value_store, vector_clock
 
     # Hash the key
-    key_hash_value = hash(key)
+    key_shard_destination = consistent_hash(key, shard_count)
+    print(f"Key: {key} will go to shard group {key_shard_destination}")
 
-    # Find out what shard this key is going to, hash_value % NUM_OF_SHARDS
-    key_shard_destination = key_hash_value % shard_count
+    #---- PROXY CODE ----
 
     # check if this key is in my shard group
-    if key_shard_destination == shard_number:
-
-        # Forward request to myself
-        url = f"http://{my_socket_address}/replica/kvs/{key}"
-        try:
-            # forward respective method and return response to client
-            if request.method == "PUT":
-                response = requests.put(url, json=request.get_json(silent=True))
-            elif request.method == "GET":
-                response = requests.get(url, json=request.get_json(silent=True))
-            elif request.method == "DELETE":
-                response = requests.delete(url, json=request.get_json(silent=True))
-            else:
-                return make_response(jsonify({'error': 'Method Not Allowed'}), 405)
-            
-            # return response to client
-            return response
-        except requests.exceptions.RequestException as e:
-            # forwarding request failed
-            print(f'Could not forward to myself ... error: {e}')
-
-    # forward to correct shard group
-    else: 
+    if key_shard_destination != shard_number:
 
         # Make a local variable to track down replcias
         down_replicas = []
@@ -489,30 +498,18 @@ def proxy_forward(key):
 
         # Forward to 1 replica in shard group  (NOTE: only forward to 1 because they will broadcast to everyone in their group)
         for replica in shard_groups[key_shard_destination][:]:
-
-            # Forward request to shard with same shard number as the key
-            url = f"http://{replica}/replica/kvs/{key}"
             try:
+                # Forward request to shard with same shard number as the key
+                url = f"http://{replica}/kvs/{key}"
                 # forward respective method and return response to client
-                if request.method == "PUT":
-                    response = requests.put(url, json=request.get_json(silent=True))
-                elif request.method == "GET":
-                    response = requests.get(url, json=request.get_json(silent=True))
-                elif request.method == "DELETE":
-                    response = requests.delete(url, json=request.get_json(silent=True))
-                else:
-                    return make_response(jsonify({'error': 'Method Not Allowed'}), 405)
-                
+                response = requests.put(url, json=request.get_json(silent=True))
                 # break out of loop
                 break
-
             except requests.exceptions.RequestException as e:
                 # forwarding request failed
-                print(f'Could not connect to {replica}: {e}')
-
+                print(f'Forwarding request failed, could not connect to {replica}: {e}')
                 # Remove replica from view_list
                 view_list.remove(replica)
-
                 # Add replica is down_replicas
                 down_replicas.append(replica)
                 continue
@@ -523,43 +520,9 @@ def proxy_forward(key):
                 if replica != my_socket_address:
                     broadcast_delete_view(replica)
 
-        return response
+        return response.content, response.status_code, response.headers.items()
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ================================================================================================================
-# ----------------------------------------------------------------------------------------------------------------
-#                  /replica/kvs/<key> endpoint
-# ----------------------------------------------------------------------------------------------------------------
-# ================================================================================================================
-
-
-#          ~~~~~~~~~~~~~~~~~~~~~
-#          ~~~~~ PUT logic ~~~~~
-#          ~~~~~~~~~~~~~~~~~~~~~
-@app.route('/replica/kvs/<key>', methods=['PUT'])
-def put_key_value(key):
-    # Get global
-    global key_value_store, vector_clock
-
+    
     # Create a local variable
     status_code = 0
 
@@ -600,6 +563,7 @@ def put_key_value(key):
 
             # Write to key value store
             key_value_store[key] = value
+            print(f"Adding {key}:{value} to kvs ... received from client")
 
             # Merge vector clocks
             merge_vector_clocks(causal_metadata)
@@ -636,6 +600,7 @@ def put_key_value(key):
 
             # Write to key value store
             key_value_store[key] = value
+            print(f"Adding {key}:{value} to kvs ... received from replica {request.headers.get('Replica')}")
 
             # Merge vector clocks
             merge_vector_clocks(causal_metadata)
@@ -652,12 +617,53 @@ def put_key_value(key):
 #          ~~~~~~~~~~~~~~~~~~~~~
 #          ~~~~~ GET logic ~~~~~
 #          ~~~~~~~~~~~~~~~~~~~~~
-@app.route('/replica/kvs/<key>', methods=['GET'])
+@app.route('/kvs/<key>', methods=['GET'])
 def get_key_value(key):
 
     # Get globals
     global key_value_store, vector_clock
 
+    # Hash the key
+    key_shard_destination = consistent_hash(key, shard_count)
+    print(f"Key: {key} is in shard group {key_shard_destination}")
+
+    #---- ACT AS PROXY ----
+
+    # check if this key is in my shard group
+    if key_shard_destination != shard_number:
+
+        # Make a local variable to track down replcias
+        down_replicas = []
+        response = None
+
+        # Forward to 1 replica in shard group  (NOTE: only forward to 1 because they will broadcast to everyone in their group)
+        for replica in shard_groups[key_shard_destination][:]:
+            try:
+                # Forward request to shard with same shard number as the key
+                url = f"http://{replica}/kvs/{key}"
+                # forward respective method and return response to client
+                response = requests.get(url, json=request.get_json(silent=True))
+                # break out of loop
+                break
+            except requests.exceptions.RequestException as e:
+                # forwarding request failed
+                print(f'Forwarding request failed, could not connect to {replica}: {e}')
+                # Remove replica from view_list
+                view_list.remove(replica)
+                # Add replica is down_replicas
+                down_replicas.append(replica)
+                continue
+        
+        # Broadcast to everyone that a replica is down
+        if len(down_replicas) > 0:
+            for replica in down_replicas:
+                if replica != my_socket_address:
+                    broadcast_delete_view(replica)
+
+        return response.content, response.status_code, response.headers.items()
+
+
+    # --- REPLICA ---
     # Get json data
     data = request.get_json(silent=True)
 
@@ -698,6 +704,48 @@ def delete_key_value(key):
     # Get globals
     global key_value_store, vector_clock
 
+    # Hash the key
+    key_shard_destination = consistent_hash(key, shard_count)
+    print(f"Key: {key} is in shard group {key_shard_destination}")
+
+    #---- ACT AS PROXY ----
+
+    # check if this key is in my shard group
+    if key_shard_destination != shard_number:
+
+        # Make a local variable to track down replcias
+        down_replicas = []
+        response = None
+
+        # Forward to 1 replica in shard group  (NOTE: only forward to 1 because they will broadcast to everyone in their group)
+        for replica in shard_groups[key_shard_destination][:]:
+            try:
+                # Forward request to shard with same shard number as the key
+                url = f"http://{replica}/kvs/{key}"
+                # forward respective method and return response to client
+                response = requests.delete(url, json=request.get_json(silent=True))
+                # break out of loop
+                break
+            except requests.exceptions.RequestException as e:
+                # forwarding request failed
+                print(f'Forwarding request failed, could not connect to {replica}: {e}')
+                # Remove replica from view_list
+                view_list.remove(replica)
+                # Add replica is down_replicas
+                down_replicas.append(replica)
+                continue
+        
+        # Broadcast to everyone that a replica is down
+        if len(down_replicas) > 0:
+            for replica in down_replicas:
+                if replica != my_socket_address:
+                    broadcast_delete_view(replica)
+
+        return response.content, response.status_code, response.headers.items()
+
+
+    # --- REPLICA ---
+
     # Get json data
     data = request.get_json(silent=True)
 
@@ -722,7 +770,6 @@ def delete_key_value(key):
                 return make_response(jsonify({"error": "Key does not exist"}), 404)
 
             # Delete key
-            # with key_value_store_lock:
             del key_value_store[key]
 
             # Merge vector clocks
@@ -750,7 +797,6 @@ def delete_key_value(key):
                 return make_response(jsonify({"error": "Key does not exist"}), 404)
 
             # Delete key from store
-            # with key_value_store_lock:
             del key_value_store[key]
 
             # Merge vector clocks
@@ -1071,7 +1117,7 @@ def reshard():
 #      INITIALIZE ON STARTUP (ONLY BROADCAST YOUR VIEW) 
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
-broadcast_my_view()
+# broadcast_my_view()
 if shard_number is not None:
     print(f"Shards: {shard_groups}")
 else:
