@@ -18,7 +18,16 @@ my_socket_address = os.getenv('SOCKET_ADDRESS')
 my_view = os.getenv('VIEW')
 
 # Get environment variable for shard count
-shard_count = os.getenv('SHARD_COUNT')
+shard_count_str = os.getenv('SHARD_COUNT')
+
+if shard_count_str is not None:
+    try:
+        shard_count = int(shard_count_str)
+    except ValueError:
+        print("SHARD_COUNT is not a valid integer.")
+else:
+    print("SHARD_COUNT environment variable is not set.")
+    shard_count = None
 
 
 # ================================================================================================================
@@ -38,7 +47,12 @@ vector_clock = {key: 0 for key in view_list}
 key_value_store = {} 
 
 # Create a shard number, this is the group number that this replica will be in
-shard_number = view_list.index(my_socket_address) % shard_count 
+if shard_count is not None:
+    shard_number = view_list.index(my_socket_address) % shard_count 
+    print(f"{my_socket_address} is in shard group {shard_number}")
+else:
+    shard_number = None
+    print(f"No shard_count, I'm not apart of any shard group yet ...")
 
 
 # TODO: WHY IS HISTORY NEEDED??????
@@ -82,7 +96,8 @@ def make_shard_groups():
 
 
 # Create a shard group, this is the group that this repllica will be in
-shard_groups = make_shard_groups()
+if shard_count is not None:
+    shard_groups = make_shard_groups()
 
 
 
@@ -185,6 +200,7 @@ def add_replica_to_view():
     if new_socket_address not in view_list:
         view_list.append(new_socket_address)
         view_list.sort()
+        print(f"Adding {new_socket_address} to my view ... my view: {view_list}")
 
     # Add new replica address in vector clock
     if new_socket_address not in vector_clock:
@@ -1042,6 +1058,25 @@ def start_reshard():
 @app.route('/shard/reshard', methods=['PUT'])
 def reshard():
     pass
+
+
+
+
+
+
+
+
+# ================================================================================================================
+# ----------------------------------------------------------------------------------------------------------------
+#      INITIALIZE ON STARTUP (ONLY BROADCAST YOUR VIEW) 
+# ----------------------------------------------------------------------------------------------------------------
+# ================================================================================================================
+broadcast_my_view()
+if shard_number is not None:
+    print(f"Shards: {shard_groups}")
+else:
+    print(f"I don't know what the shard groups are ...")
+
 
 
 
