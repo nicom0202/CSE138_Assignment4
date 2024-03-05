@@ -114,8 +114,7 @@ def broadcast_my_view():
                 try:
                     data = {'socket-address': my_socket_address}
                     url = f"http://{replica}/view"
-                    headers = {'Replica': my_socket_address}
-                    requests.put(url, json=data, headers=headers, timeout=1)
+                    requests.put(url, json=data, timeout=1)
                 except requests.exceptions.RequestException as e:
                     # No need to delete/broadcast replica bc it will eventually get detected and broadcasted 
                     print(f"Exception caught in broadcast_my_view() to {replica}: {e}")
@@ -149,56 +148,90 @@ def broadcast_delete_view(bad_replica_address):
 
 
 
-
-
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-# HELPER FUNCTIONS:                   GETTING CURRENT KVS ON STARTUP
+#                  /view endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
 
-# This function will get the key_value_store and vector_clock from a current replica in your shard_group
-def get_kvs_on_startup():
+#           ~~~~~~~~~~~~~~~~~~~~~
+#          ~~~~~ /view PUT ~~~~~~~
+#           ~~~~~~~~~~~~~~~~~~~~~
+@app.route('/view', methods=['PUT'])
+def add_replica_to_view():  
     # Get globals
-    global shard_groups, shard_number, key_value_store, vector_clock
+    global view_list
 
-    # Don't request kvs if you're the only replica in the shard group
-    if len(shard_groups[shard_number]) != 1:
-        for replica in shard_groups[shard_number][:]:  #ONLY REQUEST KVS ON STARTUP FROM SAME SHARD!!!!!!!
-            try:
-                url = f"http://{replica}/get_kvs"
-                response = requests.get(url, timeout=5)
-                if response.status_code == 200:
-                    data = response.json()
-                    # Check that kvs an vc exist in response
-                    if data.get('kvs') is not None and data.get('vc') is not None:
-                        # Update kvs
-                        key_value_store.update(data.get('kvs')) 
-                        # Update vc
-                        merge_vector_clocks(data.get('vc'))
-                        # Break out of for-loop
-                        break
-            except requests.exceptions.RequestException as e:
-                # No need to delete/broadcast replica bc it will eventually get detected and broadcasted 
-                print(f"Exception caught in get_kvs_on_startup(): {e}")
+    # Get data from request
+    data = request.get_json()
 
-@app.route('/get_kvs', methods=['GET'])
-def get_kvs():
+    # Check if data is None or empty
+    if data is None:
+        return make_response(jsonify({'error': 'Bad request, empty data'}), 400)
+
+    new_socket_address = data.get('socket-address')
+
+    # Check if socket-address exists in the data
+    if new_socket_address is None:
+        return make_response(jsonify({'error': 'Bad request, missing socket-address'}), 400)
+
+    # Check if the socket already exists in their view
+    if new_socket_address in view_list:
+        return make_response(jsonify({"result": "already present"}), 200)
+
+
+    # Add new replica to view list
+    if new_socket_address not in view_list:
+        view_list.append(new_socket_address)
+        view_list.sort()
+
+    # Add new replica address in vector clock
+    if new_socket_address not in vector_clock:
+        vector_clock[new_socket_address] = 0
+
+    # Make response
+    return make_response(jsonify(data={"result": "added"}), 201)
+
+
+#           ~~~~~~~~~~~~~~~~~~~~~
+#          ~~~~~ /view GET ~~~~~~~
+#           ~~~~~~~~~~~~~~~~~~~~~
+@app.route('/view', methods=['GET'])
+def get_view():
     # Get globals
-    global key_value_store, vector_clock
-    # Return kvs and vc
-    return make_response(jsonify({'kvs': key_value_store, 'vc': vector_clock}), 200)
+    global view_list
+    # Make response
+    return make_response(jsonify({"view": view_list}), 200)
 
 
+#           ~~~~~~~~~~~~~~~~~~~~~
+#          ~~~~~ /view DELETE ~~~~
+#           ~~~~~~~~~~~~~~~~~~~~~
+@app.route('/view', methods=['DELETE'])
+def remove_a_replica_from_view():
+    # Get globals
+    global view_list
 
+    # Get data from request
+    data = request.get_json()
 
+    # Check if data is None or empty
+    if data is None:
+        return make_response(jsonify({'error': 'Bad request, empty data'}), 400)
 
+    delete_socket_address = data.get('socket-address')
 
+    # Check if socket-address exists in the data
+    if delete_socket_address is None:
+        return make_response(jsonify({'error': 'Bad request, missing socket-address'}), 400)
 
-
-
+    # Check if socket-address exists in your view
+    if delete_socket_address in view_list and delete_socket_address != my_socket_address:
+        view_list.remove(delete_socket_address)
+        return make_response(jsonify({"result": "deleted"}), 200)
+    
+    return make_response(jsonify({"error": "View has no such replica"}), 404)
 
 
 
@@ -208,7 +241,8 @@ def get_kvs():
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#      HELPER FUNCTIONS FOR VECTOR CLOCKS       TODO: UPDATE VECTOR CLOCK LOGIC (ONLY COMPARE VC'S IN YOUR SHARD GROUP)
+#      HELPER FUNCTIONS FOR VECTOR CLOCKS       
+#                                               TODO: UPDATE VECTOR CLOCK LOGIC (ONLY COMPARE VC'S IN YOUR SHARD GROUP)
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
@@ -343,7 +377,7 @@ def broadcast_kvs_delete(key):
     global view_list, my_socket_address
 
     # Create a list to hold replicas that are down
-    bad_replicas = []
+    down_replicas = []
 
     # Broadcast to everyone in your shard group (skip yourself), to DELETE a key in kvs
     for replica in shard_groups[shard_number][:]:
@@ -367,12 +401,12 @@ def broadcast_kvs_delete(key):
                         raise Exception
                 except requests.exceptions.RequestException:
                     # Found down replica, delete from view list & add to down_replicas
-                    bad_replicas.append(replica)
+                    down_replicas.append(replica)
                     break  # Continue to for loop iteration and break while loop iteration(aka next replica)
                 
     # if you find any replicas that are down, broadcast it  
-    if len(bad_replicas) > 0:
-        for replica in bad_replicas:
+    if len(down_replicas) > 0:
+        for replica in down_replicas:
             if replica != my_socket_address:
                 broadcast_delete_view(replica)
 
@@ -434,7 +468,7 @@ def proxy_forward(key):
     else: 
 
         # Make a local variable to track down replcias
-        bad_replicas = []
+        down_replicas = []
         response = None
 
         # Forward to 1 replica in shard group  (NOTE: only forward to 1 because they will broadcast to everyone in their group)
@@ -447,7 +481,7 @@ def proxy_forward(key):
                 if request.method == "PUT":
                     response = requests.put(url, json=request.get_json(silent=True))
                 elif request.method == "GET":
-                    response = requests.get(url)
+                    response = requests.get(url, json=request.get_json(silent=True))
                 elif request.method == "DELETE":
                     response = requests.delete(url, json=request.get_json(silent=True))
                 else:
@@ -463,13 +497,13 @@ def proxy_forward(key):
                 # Remove replica from view_list
                 view_list.remove(replica)
 
-                # Add replica is bad_replicas
-                bad_replicas.append(replica)
+                # Add replica is down_replicas
+                down_replicas.append(replica)
                 continue
         
         # Broadcast to everyone that a replica is down
-        if len(bad_replicas) > 0:
-            for replica in bad_replicas:
+        if len(down_replicas) > 0:
+            for replica in down_replicas:
                 if replica != my_socket_address:
                     broadcast_delete_view(replica)
 
@@ -802,7 +836,7 @@ def get_key_count_at_ID(ID):
     # Local variables
     response = None
     size = None
-    bad_replicas = []
+    down_replicas = []
 
     # Check that ID is a valid shard group
     if ID not in shard_groups:
@@ -836,12 +870,12 @@ def get_key_count_at_ID(ID):
                     # Remove replica from view_list
                     view_list.remove(replica)
 
-                    # Add replica to bad_replicas
-                    bad_replicas.append(replica)
+                    # Add replica to down_replicas
+                    down_replicas.append(replica)
                     continue
 
     # Broadcast bad replicas
-    if len(bad_replicas) > 0:
+    if len(down_replicas) > 0:
         for replcia in view_list:
             if replica != my_socket_address:
                 broadcast_delete_view(replcia)
@@ -872,31 +906,124 @@ def get_key_value_store_size():
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#                  /shard/add-member/<ID>
+#                  /shard/add-member/<ID>                   TODO: NEED A WAY FOR A REPLICA TO RETREIVE KVS AND VC WHEN ADDED TO A SHARD GROUP
+#                                                           NOTE: SOLUTION: IF YOU'RE IN THAT SHARD GROUP & YOU RECIEVE THIS, SEND VC AND KVS TO NEW REPLICA
+#                                                           NOTE: MAYBE ADD A NEW ENDPOINT CALLED /populate & SEND YOUR KVS/VC WHEN YOU GET A ADD-MEMBER IF ID IS YOUR SHARD_NUMBER
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
-def broadcast_add_member(sokcet_address):
-    pass
+def broadcast_add_member(shard_id, socket_address):
+
+    # Get globals
+    global view_list, my_socket_address
+
+    # Create a list to hold replicas that are down
+    down_replicas = []
+
+    # Broadcast to everyone in view list (skip yourself) to PUT /shard/add-member/<ID>
+    for replica in view_list[:]:
+        if replica != my_socket_address:
+            try:
+                data = {'socket-address': socket_address}
+                url = f"http://{replica}/shard/add-member/{shard_id}"
+                headers = {'Replica': my_socket_address}
+                response = requests.put(url, json=data, headers=headers, timeout=5)
+                if response.status_code == 200:
+                    continue
+                else:
+                    # unexpected behavior TODO: maybe raise an exception?????
+                    pass
+            except requests.exceptions.RequestException as e:
+                print(f"Unable to connect to {replica} ... error: {e}")
+                down_replicas.append(replica)
+    
+    # Broadcast to everyone a replica is down
+    if len(down_replicas) > 0:
+        for replica in down_replicas:
+            if replica != my_socket_address:
+                broadcast_delete_view(replica)
+
 
 
 @app.route('/shard/add-member/<ID>', methods=['PUT'])
 def add_member(ID):
 
+    # Get globals
+    global view_list, shard_groups, key_value_store, vector_clock
+
     # Get the data from the request
+    data = request.json()
 
     # Check that socket-address is not None
-
+    if 'socket-address' not in data:
+        return make_response(jsonify({'error': 'No socket-address sent'}), 400)
+    
     # Get new socket-address
+    new_socket_address = data.get('socket-address')
 
-    # Check if it's from a replica (use headers to distinguish from client and replica)
-        # If yes, add socket-address to shard_groups[ID]
-        # If no, broadcast to everyone in view_list to add the new replica to shard group ID
-    pass
+    # Check that ID is an existing shard group
+    if ID not in shard_groups:
+        return make_response(jsonify({'error': f'ID: {ID} does not exist in shard ids'}), 404)
+    
+    # Check if socket-address is in my view list
+    if new_socket_address not in view_list:
+        return make_response(jsonify({'error': f'{new_socket_address} does not exist in my view'}), 404)
+
+    # Add new_socket_address to shard_groups[ID] IF it's not already there
+    if new_socket_address not in shard_groups[ID]:
+        shard_groups[ID].append(new_socket_address)
+
+    # Check if this request is from a client
+    if 'Replica' not in request.headers:
+        # Broadcast to everyone to add this replica to shard_groups[ID]
+        broadcast_add_member(ID, new_socket_address)
+
+    # If ID is my shard group, send a PUT request to new_socket_address in /populate endpoint. Send KVS and VC
+    if ID == shard_number:
+        try:
+            data = {'kvs': key_value_store, 'vc': vector_clock}
+            url = f"http://{new_socket_address}/populate"
+            headers = {'Replica': my_socket_address}
+            response = requests.put(url, json=data, headers=headers, timeout=5)
+            if response.status_code != 200:
+                # Unexpected behavior TODO: maybe raise exception 
+                pass
+        except requests.exceptions.RequestException as e:
+            print(f"Unable to connect to {new_socket_address} when sending a /populate request: {e}")
+            #TODO: do i need to delete this view????
 
 
+    # Make a response
+    return make_response(jsonify({'result': 'node added to shard'}), 200)
 
 
+@app.route('/populate', methods=['PUT'])
+def populate():
+    # if you get this route it means you're new and need the info for your shard group to participate
+    # NOTE: will need to send: shard-id, kvs & vc
 
+    # Get globals
+    global key_value_store, vector_clock
+
+    # Get data from request
+    data = request.get_json()
+
+    # Check that kvs is in data
+    if 'kvs' not in data:
+        make_response(jsonify({'error': 'Missing kvs in /populate route'}), 400)
+
+    # Update kvs
+    key_value_store = data.get('kvs')
+
+    # Check that vc is in data
+    if 'vc' not in data:
+        make_response(jsonify({'error': 'Missing vc in /populate route'}), 400)
+
+    # Update vc
+    vector_clock = data.get('vc')
+
+    # Make response 
+    print(f"Updated kvs & vc from {data.get('Replica')}")
+    return make_response(jsonify({'result': f"Updated kvs & vc from {data.get('Replica')}"}))
 
 
 
