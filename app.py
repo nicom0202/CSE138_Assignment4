@@ -100,6 +100,8 @@ def make_shard_groups():
 # Create a shard group, this is the group that this repllica will be in
 if shard_count is not None:
     shard_groups = make_shard_groups()
+else:
+    shard_groups = None
 
 
 
@@ -260,8 +262,7 @@ def remove_a_replica_from_view():
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#      HELPER FUNCTIONS FOR VECTOR CLOCKS       
-#                                               TODO: UPDATE VECTOR CLOCK LOGIC (ONLY COMPARE VC'S IN YOUR SHARD GROUP)
+# HELPER FUNCTIONS:                  VECTOR CLOCKS COMPARISON     
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
@@ -304,7 +305,6 @@ def dependency_test_replica(VC2, sender): #NOTE: VC2 is the vector_clock of the 
                 return False
     return True
 
-# Helper funciton to merge vector clocks
 def merge_vector_clocks(VC2):
     # Get globals
     global vector_clock
@@ -339,8 +339,8 @@ def merge_vector_clocks(VC2):
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-# HELPER FUNCTIONS:            CONSISTENT HASHING
-#                                                   TODO: FIX CONSISTENT HASHING FUNCTIONS, THEY DON'T WORK
+# HELPER FUNCTIONS:                  CONSISTENT HASHING
+#                                                   TODO: NEED A BETTER CONSISTENT HASHING FUNCTION SO THAT LESS KEYS MOVE WHEN A SHARD ENTERS/LEAVES
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
@@ -465,7 +465,7 @@ def broadcast_kvs_delete(key):
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#                  /replica/kvs/<key> endpoint
+#                                         /kvs/<key> endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
@@ -817,7 +817,7 @@ def delete_key_value(key):
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#                  /shard/ids endpoint
+#                                       /shard/ids endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 @app.route('/shard/ids', methods=['GET'])
@@ -837,7 +837,7 @@ def get_shard_ids():
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#                  /shard/node-shard-id endpoint
+#                                     /shard/node-shard-id endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 @app.route('/shard/node-shard-id', methods=['GET'])
@@ -858,7 +858,7 @@ def get_node_shard_id():
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#                  /shard/members/<ID>
+#                                      /shard/members/<ID> endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 @app.route('/shard/members/<ID>', methods=['GET'])
@@ -888,7 +888,7 @@ def get_shard_members(ID):
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#                  /shard/key-count/<ID>
+#                                   /shard/key-count/<ID> endpoint
 #                                                   TODO: MIGHT NEED TO DO DEPENDENCY TESTS IN CASE A WRITE HASN'T HAPPENED YET
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
@@ -978,9 +978,8 @@ def get_key_value_store_size():
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#                  /shard/add-member/<ID>                   TODO: NEED A WAY FOR A REPLICA TO RETREIVE KVS AND VC WHEN ADDED TO A SHARD GROUP
-#                                                           NOTE: SOLUTION: IF YOU'RE IN THAT SHARD GROUP & YOU RECIEVE THIS, SEND VC AND KVS TO NEW REPLICA
-#                                                           NOTE: MAYBE ADD A NEW ENDPOINT CALLED /populate & SEND YOUR KVS/VC WHEN YOU GET A ADD-MEMBER IF ID IS YOUR SHARD_NUMBER
+#                                    /shard/add-member/<ID> endpoint                 
+#                                                           TODO: OPTIMIZE, IF YOU ALREADY GOT KVS, VC, SHARD_GROUPS, SHARD_COUNT FROM A REPLICA, DON'T ACCEPT ANOTHER ONE
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 def broadcast_add_member(shard_id, socket_address):
@@ -1020,10 +1019,18 @@ def broadcast_add_member(shard_id, socket_address):
 def add_member(ID):
 
     # Get globals
-    global view_list, shard_groups, key_value_store, vector_clock
+    global view_list, shard_groups, key_value_store, vector_clock, shard_count, shard_groups
+
+    try:
+        # Attempt to convert ID to int
+        ID = int(ID)
+
+    except ValueError:
+        # Handle the case where ID cannot be converted to an integer
+        return make_response(jsonify({'error': f'ID: {ID} does not exist in shard ids'}), 404)
 
     # Get the data from the request
-    data = request.json()
+    data = request.get_json()
 
     # Check that socket-address is not None
     if 'socket-address' not in data:
@@ -1038,11 +1045,13 @@ def add_member(ID):
     
     # Check if socket-address is in my view list
     if new_socket_address not in view_list:
+        print(f"{new_socket_address} is not in my view_list: {view_list}")
         return make_response(jsonify({'error': f'{new_socket_address} does not exist in my view'}), 404)
 
     # Add new_socket_address to shard_groups[ID] IF it's not already there
     if new_socket_address not in shard_groups[ID]:
         shard_groups[ID].append(new_socket_address)
+        print(f"Addinng {new_socket_address} to shard group {ID} ... shard_groups: {shard_groups}")
 
     # Check if this request is from a client
     if 'Replica' not in request.headers:
@@ -1052,7 +1061,7 @@ def add_member(ID):
     # If ID is my shard group, send a PUT request to new_socket_address in /populate endpoint. Send KVS and VC
     if ID == shard_number:
         try:
-            data = {'kvs': key_value_store, 'vc': vector_clock}
+            data = {'kvs': key_value_store, 'vc': vector_clock, 'shard-groups': shard_groups, 'shard-count': shard_count}
             url = f"http://{new_socket_address}/populate"
             headers = {'Replica': my_socket_address}
             response = requests.put(url, json=data, headers=headers, timeout=5)
@@ -1074,7 +1083,7 @@ def populate():
     # NOTE: will need to send: shard-id, kvs & vc
 
     # Get globals
-    global key_value_store, vector_clock
+    global key_value_store, vector_clock, shard_groups, shard_count
 
     # Get data from request
     data = request.get_json()
@@ -1093,8 +1102,22 @@ def populate():
     # Update vc
     vector_clock = data.get('vc')
 
+    # Check that shard-groups is in data
+    if 'shard-groups' not in data:
+        make_response(jsonify({'error': 'Missing shard-groups in /populate route'}), 400)
+
+    # Update shard_groups
+    shard_groups = data.get('shard-groups')
+
+    # Check that shard-count is in data
+    if 'shard-count' not in data:
+        make_response(jsonify({'error': 'Missing shard-count in /populate route'}), 400)
+
+    # Update shard_count
+    shard_count = data.get('shard-count')
+
     # Make response 
-    print(f"Updated kvs & vc from {data.get('Replica')}")
+    print(f"Updated kvs, vc, shard-count, and shard-groups from {request.headers.get('Replica')}")
     return make_response(jsonify({'result': f"Updated kvs & vc from {data.get('Replica')}"}))
 
 
@@ -1105,7 +1128,7 @@ def populate():
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#                  /shard/reshard
+#                                            /shard/reshard endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 def start_reshard():
@@ -1124,10 +1147,10 @@ def reshard():
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#      INITIALIZE ON STARTUP (ONLY BROADCAST YOUR VIEW) 
+#                              INITIALIZE ON STARTUP (ONLY BROADCAST YOUR VIEW) 
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
-# broadcast_my_view()
+broadcast_my_view()
 if shard_number is not None:
     print(f"Shards: {shard_groups}")
 else:
