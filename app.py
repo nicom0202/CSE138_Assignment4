@@ -979,7 +979,7 @@ def get_key_value_store_size():
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                                    /shard/add-member/<ID> endpoint                 
-#                                                           TODO: OPTIMIZE, IF YOU ALREADY GOT KVS, VC, SHARD_GROUPS, SHARD_COUNT FROM A REPLICA, DON'T ACCEPT ANOTHER ONE
+#                                                           TODO: OPTIMIZE, IF YOU ALREADY GOT KVS, VC, SHARD_GROUPS, SHARD_COUNT FROM A REPLICA, DON'T ACCEPT ANOTHER ONE (waste of time)
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 def broadcast_add_member(shard_id, socket_address):
@@ -1019,7 +1019,7 @@ def broadcast_add_member(shard_id, socket_address):
 def add_member(ID):
 
     # Get globals
-    global view_list, shard_groups, key_value_store, vector_clock, shard_count, shard_groups
+    global view_list, shard_groups, key_value_store, vector_clock, shard_count, shard_groups, shard_number
 
     try:
         # Attempt to convert ID to int
@@ -1061,7 +1061,7 @@ def add_member(ID):
     # If ID is my shard group, send a PUT request to new_socket_address in /populate endpoint. Send KVS and VC
     if ID == shard_number:
         try:
-            data = {'kvs': key_value_store, 'vc': vector_clock, 'shard-groups': shard_groups, 'shard-count': shard_count}
+            data = {'kvs': key_value_store, 'vc': vector_clock, 'shard-groups': shard_groups, 'shard-count': shard_count, 'shard-number':shard_number}
             url = f"http://{new_socket_address}/populate"
             headers = {'Replica': my_socket_address}
             response = requests.put(url, json=data, headers=headers, timeout=5)
@@ -1083,7 +1083,7 @@ def populate():
     # NOTE: will need to send: shard-id, kvs & vc
 
     # Get globals
-    global key_value_store, vector_clock, shard_groups, shard_count
+    global key_value_store, vector_clock, shard_groups, shard_count, shard_number
 
     # Get data from request
     data = request.get_json()
@@ -1115,6 +1115,13 @@ def populate():
 
     # Update shard_count
     shard_count = data.get('shard-count')
+
+    # Check that shard-number is in data
+    if 'shard-number' not in data:
+        make_response(jsonify({'error': 'Missing shard-count in /populate route'}), 400)
+
+    # Update shard_number
+    shard_number = data.get('shard-number')
 
     # Make response 
     print(f"Updated kvs, vc, shard-count, and shard-groups from {request.headers.get('Replica')}")
