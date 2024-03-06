@@ -168,6 +168,7 @@ def broadcast_delete_view(bad_replica_address):
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                  /view endpoint
+#                                           TODO: IF DELETE VIEW, DELETE THAT SOCKET FROM SHARD_GROUPS TOO!!!!!
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
@@ -345,20 +346,14 @@ def merge_vector_clocks(VC2):
 
 
 def consistent_hash(key, shard_count):
-    hashed_key = _hash_key(key)
-    shard = _find_shard(hashed_key, shard_count)
-    return shard
-
-def _hash_key(key):
-    # Use MD5 hash function for consistent hashing
-    return int(hashlib.md5(key.encode()).hexdigest(), 16)
-
-def _find_shard(hashed_key, shard_count):
-    # Calculate the shard number using modulo operation
-    shard = hashed_key % shard_count
-    return shard
-
-
+    # Calculate MD5 hash
+    hash_obj = hashlib.md5(key.encode())
+    hash_digest = int(hash_obj.hexdigest(), 16)
+    
+    # Map the hash value to one of the shards
+    shard_index = hash_digest % shard_count
+    
+    return shard_index
 
 
 
@@ -500,6 +495,7 @@ def put_key_value(key):
         for replica in shard_groups[key_shard_destination][:]:
             try:
                 # Forward request to shard with same shard number as the key
+                print(f"Forwarding request to PUT request to {replica}")
                 url = f"http://{replica}/kvs/{key}"
                 # forward respective method and return response to client
                 response = requests.put(url, json=request.get_json(silent=True))
@@ -640,6 +636,7 @@ def get_key_value(key):
         for replica in shard_groups[key_shard_destination][:]:
             try:
                 # Forward request to shard with same shard number as the key
+                print(f"Forwarding request to GET request to {replica}")
                 url = f"http://{replica}/kvs/{key}"
                 # forward respective method and return response to client
                 response = requests.get(url, json=request.get_json(silent=True))
@@ -698,7 +695,7 @@ def get_key_value(key):
 #          ~~~~~~~~~~~~~~~~~~~~~~
 #          ~~~~ DELETE logic ~~~~
 #          ~~~~~~~~~~~~~~~~~~~~~~
-@app.route('/replica/kvs/<key>', methods=['DELETE'])
+@app.route('/kvs/<key>', methods=['DELETE'])
 def delete_key_value(key):
 
     # Get globals
@@ -840,10 +837,10 @@ def get_shard_ids():
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#                  /shard/node-shard-ids endpoint
+#                  /shard/node-shard-id endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
-@app.route('/shard/node-shard-ids', methods=['GET'])
+@app.route('/shard/node-shard-id', methods=['GET'])
 def get_node_shard_id():
     # Get globals
     global shard_number
@@ -870,14 +867,19 @@ def get_shard_members(ID):
     # Get globals
     global shard_groups
 
-    # Check if ID is in shard_groups
-    if ID in shard_groups:
-        return make_response(jsonify({'shard-members': shard_groups.get(ID)}), 200)
-    
-    # ID does not exist in shard_groups
-    return make_response(jsonify({'error': 'No such shard ID exists'}), 404)
+    try:
+        # Attempt to convert ID to int
+        ID = int(ID)
 
-
+        # Check if ID is in shard_groups
+        if ID in shard_groups:
+            return make_response(jsonify({'shard-members': shard_groups.get(ID)}), 200)
+        
+        # ID does not exist in shard_groups
+        return make_response(jsonify({'error': 'No such shard ID exists'}), 404)
+    except ValueError:
+        # Handle the case where ID cannot be converted to an integer
+        return make_response(jsonify({'error': 'No such shard ID exists'}), 404)
 
 
 
@@ -887,6 +889,7 @@ def get_shard_members(ID):
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                  /shard/key-count/<ID>
+#                                                   TODO: MIGHT NEED TO DO DEPENDENCY TESTS IN CASE A WRITE HASN'T HAPPENED YET
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 @app.route('/shard/key-count/<ID>', methods=['GET'])
@@ -899,7 +902,14 @@ def get_key_count_at_ID(ID):
     response = None
     size = None
     down_replicas = []
+    try:
+        # Attempt to convert ID to int
+        ID = int(ID)
 
+    except ValueError:
+        # Handle the case where ID cannot be converted to an integer
+        return make_response(jsonify({'error': 'No such shard ID exists'}), 404)
+    
     # Check that ID is a valid shard group
     if ID not in shard_groups:
         make_response(jsonify({'error': 'Shard ID does not exist'}), 404)
