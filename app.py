@@ -3,6 +3,7 @@ import requests
 import os
 import time
 import hashlib
+import math
 
 app = Flask(__name__)
 
@@ -1138,12 +1139,39 @@ def populate():
 #                                            /shard/reshard endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
+
 def start_reshard():
     pass
 
 @app.route('/shard/reshard', methods=['PUT'])
 def reshard():
-    pass
+    # Get globals
+    global view_list
+
+    # Get data
+    data = request.get_json()
+
+    # Check to see if data is correct
+    if data is None:
+        return make_response(jsonify({'error': 'data is none'}), 400)
+    
+    # Check that casaul meta data exists in json
+    if 'shard-count' not in data:
+        return make_response(jsonify({'error': 'PUT request does not contain shard-count'}), 400) #TODO: might have to change this response to something else
+
+    new_shard_count = data.get('shard-count')
+    
+    min_shard_groups = math.floor(len(view_list) / 2) # if you divide by 2, that's how many groups of two you can have (take the floor for odd numbers aka 1 group of 3)
+
+    print(f"{new_shard_count} > {min_shard_groups}")
+    if new_shard_count > min_shard_groups:
+        return make_response(jsonify({"error": "Not enough nodes to provide fault tolerance with requested shard count"}),400)
+
+    # Proceed with resharding ....
+    start_reshard()
+
+    # Make response
+    return make_response(jsonify({"result": "resharded"}), 200)
 
 
 
