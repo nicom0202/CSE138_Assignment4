@@ -116,7 +116,7 @@ else:
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
-
+# TODO: GET RID OF THIS FUCNTION AND MAKE A CLASS TO HANDLE CONSISTENT HASHING
 def consistent_hash(key, shard_count):
     # Calculate MD5 hash
     hash_obj = hashlib.md5(key.encode())
@@ -128,12 +128,17 @@ def consistent_hash(key, shard_count):
     return shard_index
 
 # IDEA:
-# (1) Need a function to initialize every socket-addresss to a hash value (aka hash(my_socket_address) & hash(view_list)
+# (1) Need a function to initialize every socket-addresss to a hash value (aka hash(my_socket_address) & hash(view_list))
 #           NOTE: think of a ring and the nodes are hashed to a value on this ring
+#           NOTE: here is where shard_groups will be initiated on startup (ALL REPLICAS SHOULD DETERMINISTICALLY COME TO THE SAME CONCLUSION WHEN HASHING SOCKET-ADDRESSES)
 
 # (2) Need a function to hash a key:value to a space
 
 # (3) Need a function to find the nearest hashed socket-address from a hashed key:value
+
+# (4) Need a function to tell you what your neighbors are on this ring 
+#           NOTE: have a left neightbor & right neighbor 
+#           NOTE: this is important for resharding (adding/removing a node from the ring)
 
 
 
@@ -291,6 +296,7 @@ def remove_a_replica_from_view():
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 # HELPER FUNCTIONS:                  VECTOR CLOCKS COMPARISON     
+#                                                               TODO: VECTOR CLOCKS NEED TO BE SYNCHRONIZED SYSTEM LEVEL, NOT JUST WITHIN SHARDS
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
