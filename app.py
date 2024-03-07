@@ -75,6 +75,7 @@ HISTORY = []
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 # INITIALIZE GLOABLS:                       SHARD_GROUPS
+#                                                           TODO: NEED TO REPLACE THIS WITH CONSISTENT-HASHING!!!!!
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
@@ -107,6 +108,32 @@ else:
 
 
 
+
+# ================================================================================================================
+# ----------------------------------------------------------------------------------------------------------------
+# HELPER FUNCTIONS:                  CONSISTENT HASHING
+#                                                   TODO: NEED A BETTER CONSISTENT HASHING FUNCTION SO THAT LESS KEYS MOVE WHEN A SHARD ENTERS/LEAVES
+# ----------------------------------------------------------------------------------------------------------------
+# ================================================================================================================
+
+
+def consistent_hash(key, shard_count):
+    # Calculate MD5 hash
+    hash_obj = hashlib.md5(key.encode())
+    hash_digest = int(hash_obj.hexdigest(), 16)
+    
+    # Map the hash value to one of the shards
+    shard_index = hash_digest % shard_count
+    
+    return shard_index
+
+# IDEA:
+# (1) Need a function to initialize every socket-addresss to a hash value (aka hash(my_socket_address) & hash(view_list)
+#           NOTE: think of a ring and the nodes are hashed to a value on this ring
+
+# (2) Need a function to hash a key:value to a space
+
+# (3) Need a function to find the nearest hashed socket-address from a hashed key:value
 
 
 
@@ -329,32 +356,6 @@ def merge_vector_clocks(VC2):
         vector_clock.clear()
         vector_clock = merged_vc
 
-
-
-
-
-
-
-
-
-
-# ================================================================================================================
-# ----------------------------------------------------------------------------------------------------------------
-# HELPER FUNCTIONS:                  CONSISTENT HASHING
-#                                                   TODO: NEED A BETTER CONSISTENT HASHING FUNCTION SO THAT LESS KEYS MOVE WHEN A SHARD ENTERS/LEAVES
-# ----------------------------------------------------------------------------------------------------------------
-# ================================================================================================================
-
-
-def consistent_hash(key, shard_count):
-    # Calculate MD5 hash
-    hash_obj = hashlib.md5(key.encode())
-    hash_digest = int(hash_obj.hexdigest(), 16)
-    
-    # Map the hash value to one of the shards
-    shard_index = hash_digest % shard_count
-    
-    return shard_index
 
 
 
@@ -890,7 +891,6 @@ def get_shard_members(ID):
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                                   /shard/key-count/<ID> endpoint
-#                                                   TODO: MIGHT NEED TO DO DEPENDENCY TESTS IN CASE A WRITE HASN'T HAPPENED YET
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 @app.route('/shard/key-count/<ID>', methods=['GET'])
@@ -1161,10 +1161,9 @@ def reshard():
 
     new_shard_count = data.get('shard-count')
     
-    min_shard_groups = math.floor(len(view_list) / 2) # if you divide by 2, that's how many groups of two you can have (take the floor for odd numbers aka 1 group of 3)
+    max_shard_groups = math.floor(len(view_list) / 2) # if you divide by 2, that's how many groups of two you can have (take the floor for odd numbers aka 1 group of 3)
 
-    print(f"{new_shard_count} > {min_shard_groups}")
-    if new_shard_count > min_shard_groups:
+    if new_shard_count > max_shard_groups:
         return make_response(jsonify({"error": "Not enough nodes to provide fault tolerance with requested shard count"}),400)
 
     # Proceed with resharding ....
@@ -1186,13 +1185,6 @@ def reshard():
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 broadcast_my_view()
-if shard_number is not None:
-    print(f"Shards: {shard_groups}")
-else:
-    print(f"I don't know what the shard groups are ...")
-
-
-
 
 
 
