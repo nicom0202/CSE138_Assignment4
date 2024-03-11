@@ -2,7 +2,6 @@ from flask import Flask, make_response, jsonify, request
 import requests
 import os
 import time
-import hashlib
 import math
 from consistent_hash import ConsistentHashRing
 
@@ -98,20 +97,8 @@ else:
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 # HELPER FUNCTIONS:                  CONSISTENT HASHING
-#                                                   TODO: NEED A BETTER CONSISTENT HASHING FUNCTION SO THAT LESS KEYS MOVE WHEN A SHARD ENTERS/LEAVES
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
-
-# # TODO: GET RID OF THIS FUCNTION AND MAKE A CLASS TO HANDLE CONSISTENT HASHING
-# def consistent_hash(key, shard_count):
-#     # Calculate MD5 hash
-#     hash_obj = hashlib.md5(key.encode())
-#     hash_digest = int(hash_obj.hexdigest(), 16)
-    
-#     # Map the hash value to one of the shards
-#     shard_index = hash_digest % shard_count
-    
-#     return shard_index
 
 hash_ring = ConsistentHashRing(view_list)
 
@@ -176,7 +163,6 @@ def broadcast_delete_view(bad_replica_address):
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                  /view endpoint
-#                                           TODO: IF DELETE VIEW, DELETE THAT SOCKET FROM SHARD_GROUPS TOO!!!!!
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
@@ -256,6 +242,7 @@ def remove_a_replica_from_view():
     # Check if socket-address exists in your view
     if delete_socket_address in view_list and delete_socket_address != my_socket_address:
         view_list.remove(delete_socket_address)
+        hash_ring.remove_node(delete_socket_address)
         return make_response(jsonify({"result": "deleted"}), 200)
     
     return make_response(jsonify({"error": "View has no such replica"}), 404)
@@ -269,11 +256,6 @@ def remove_a_replica_from_view():
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 # HELPER FUNCTIONS:                  VECTOR CLOCKS COMPARISON     
-#                                                               TODO: VECTOR CLOCKS NEED TO BE SYNCHRONIZED SYSTEM LEVEL, NOT JUST WITHIN SHARDS
-#                                                               NOTE: idea - might not have to do this if we reset vc's when resharding 
-#                                                               NOTE: idea - to make vc's system wide, maybe broadcast shard vc's to other shard vc's when an update happens (aka merge the vc's)
-#                                                               NOTE: idea - when reshard happens, reset all vc's to zero (not sure this will work bc the client might still have the old vc)
-#                                                               NOTE: best idea - when reshard happens, merge all vc's so that everyone is on the same page and can accurately compare vc's 
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
@@ -284,7 +266,8 @@ def update_vector_clock():
     # Update your socket address in vector clock
     vector_clock[my_socket_address] += 1
 
-def dependency_test_client(VC2): #NOTE: VC2 is the vector_clock of the requesting client
+# NOTE: VC2 is the vector_clock of the requesting client
+def dependency_test_client(VC2): 
     # Get globals
     global vector_clock, shard_groups, shard_number
     VC1 = vector_clock.copy()
@@ -300,7 +283,8 @@ def dependency_test_client(VC2): #NOTE: VC2 is the vector_clock of the requestin
     
     return True
 
-def dependency_test_replica(VC2, sender): #NOTE: VC2 is the vector_clock of the requesting replica and sender is the requesting replica socket-address
+# NOTE: VC2 is the vector_clock of the requesting replica and sender is the requesting replica socket-address
+def dependency_test_replica(VC2, sender): 
     # Get global
     global vector_clock, view_list
     VC1 = vector_clock.copy()
@@ -464,7 +448,6 @@ def put_key_value(key):
     global key_value_store, vector_clock
 
     # Hash the key
-    # key_shard_destination = consistent_hash(key, shard_count)           # TODO: replace with consistent hashing class, key_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
     key_shard_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
     print(f"Key: {key} will go to shard group {key_shard_destination}")
 
@@ -606,7 +589,6 @@ def get_key_value(key):
     global key_value_store, vector_clock
 
     # Hash the key
-    # key_shard_destination = consistent_hash(key, shard_count)               # TODO: replace with consistent hashing class, key_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
     key_shard_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
     print(f"Key: {key} is in shard group {key_shard_destination}")
 
@@ -689,7 +671,6 @@ def delete_key_value(key):
     global key_value_store, vector_clock
 
     # Hash the key
-    # key_shard_destination = consistent_hash(key, shard_count)           # TODO: replace with consistent hashing class, key_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
     key_shard_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
     print(f"Key: {key} is in shard group {key_shard_destination}")
 
@@ -1130,7 +1111,7 @@ def populate():
 # Only the leader (aka replica that recieved a reshard from client uses this)
 def start_reshard_leader(new_shard_count):
     # Get globals
-    global shard_groups, view_list, my_socket_address, shard_groups, shard_count, shard_number, key_value_store
+    global shard_groups, view_list, my_socket_address, shard_groups, shard_count, shard_number, key_value_store, vector_clock
 
     # Update shard_count
     shard_count = new_shard_count
@@ -1138,8 +1119,8 @@ def start_reshard_leader(new_shard_count):
     # Update shard_number
     shard_number = view_list.index(my_socket_address) % shard_count 
 
-    # Update consistent hashing with new view_list
-    # TODO
+    # Update consistent hash ring with new view_list
+    hash_ring = ConsistentHashRing(view_list)
 
     # Make new a new shard_group
     make_shard_groups()
@@ -1158,8 +1139,8 @@ def start_reshard_leader(new_shard_count):
     for key, value in key_value_store[:]:
 
         # Find out what shard group this key belongs to 
-        # key_destination = consistent_hash(key, shard_count)  # TODO: replace with consistent hashing class, key_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
         key_shard_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
+
         # Tell everyone in key_destination to unconditionally add this to their kvs
         for replica in shard_groups[key_shard_destination][:]:
             if replica != my_socket_address:
@@ -1179,6 +1160,17 @@ def start_reshard_leader(new_shard_count):
             del key_value_store[key]
 
     # Send everyone your vc 
+    for replica in view_list[:]:
+        if replica != my_socket_address:
+            try:
+                data = {'vc': vector_clock}
+                url = f"http://{replica}/shard/vector-clock/synchronization"
+                result = requests.put(url, json=data, timeout=5)
+                if result.status_code != 200:
+                    # TODO: catch unexpected behavior
+                        pass
+            except requests.exceptions.RequestException as e:
+                print(f"Exception caught in start_reshard_leader() to {replica}: {e}, unable to redistribute a key")  #TODO: catch bad replicas and delete broadcast
 
     # Done ...
 
@@ -1186,8 +1178,26 @@ def start_reshard_leader(new_shard_count):
 
 
 
+# Synnchronizing vector clocks
+@app.route('/shard/vector-clock/synchronization', methods=['PUT'])
+def vector_clock_synchronization():
+    # Get globals
+    global vector_clock
 
+    # Get data
+    data = request.get_json()
 
+    # Check that vc is in data
+    if 'vc' not in data:
+        make_response(jsonify({'error': 'vc not in data'}), 400)
+
+    recieved_vc = data.get('vc')
+
+    # Merge vector clocks
+    merge_vector_clocks(recieved_vc)
+
+    # Return 200
+    make_response(jsonify({'result': 'vector clocks merged'}), 200)
 
 
 # Redistributing key:value pairs
