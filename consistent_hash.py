@@ -9,9 +9,9 @@ class ConsistentHashRing:
             self.init_nodes(view_list)
 
     def hash(self, value):
-        return int(hashlib.md5(value.encode()).hexdigest(), 16) % 360
+        return int(hashlib.md5(value.encode()).hexdigest(), 16) % 10000000
 
-    def init_nodes(self, view_list, num_virtual_nodes=10):
+    def init_nodes(self, view_list, num_virtual_nodes=5):
         for node in view_list:
             for i in range(num_virtual_nodes):
                 virtual_node = f"{node}_virtual_{i}"
@@ -52,82 +52,6 @@ class ConsistentHashRing:
 
     def __str__(self):
         return "\n".join([f"{self.nodes[key]}: {key}" for key in self.sorted_keys])
-
-
-# test_key = 'p'
-
-# # Usage example
-# view_list = ['10.10.0.2:8090', '10.10.0.3:8090', '10.10.0.4:8090', '10.10.0.5:8090', '10.10.0.6:8090', '10.10.0.7:8090']
-# hash_ring = ConsistentHashRing(view_list)
-# # print(f"Hash-ring:")
-# # print(hash_ring)
-
-# # Test hash_key_to_node method
-# key = test_key
-# node = hash_ring.hash_key_to_node(key)
-# print(f"Hash-ring on start-up:")
-# print(f"\nThe key '{key}' will be hashed to node: {node}")
-
-# # Add a new node
-# hash_ring.add_node('10.10.0.8:8090')
-
-# # # Print the hash ring after a new node
-# # print("\nHash-ring after adding 10.10.0.8:8090:")
-# # print(hash_ring)
-
-# # Test hash_key_to_node method
-# key = test_key
-# node = hash_ring.hash_key_to_node(key)
-# print(f"Hash-ring after adding 10.10.0.8:8090:")
-# print(f"\nThe key '{key}' will be hashed to node: {node}")
-
-# # Remove a node
-# hash_ring.remove_node('10.10.0.2:8090')
-
-# # # Print the hash ring after removing a node
-# # print("\nHash-ring after removing 10.10.0.2:8090:")
-# # print(hash_ring)
-
-# # Test hash_key_to_node method
-# key = test_key
-# node = hash_ring.hash_key_to_node(key)
-# print(f"Hash-ring after removing 10.10.0.2:8090:")
-# print(f"\nThe key '{key}' will be hashed to node: {node}")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

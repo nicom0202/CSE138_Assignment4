@@ -49,13 +49,6 @@ vector_clock = {key: 0 for key in view_list}
 # Create a key value store dictionary
 key_value_store = {} 
 
-# Create a shard number, this is the group number that this replica will be in
-if shard_count is not None:
-    shard_number = view_list.index(my_socket_address) % shard_count 
-    print(f"{my_socket_address} is in shard group {shard_number}")
-else:
-    shard_number = None
-    print(f"No shard_count, I'm not apart of any shard group yet ...")
 
 
 # ================================================================================================================
@@ -66,6 +59,7 @@ else:
 
 
 # This function will assign replicas to a shard group
+
 def make_shard_groups():
     # Get globals
     global shard_count, view_list
@@ -82,6 +76,18 @@ def make_shard_groups():
 
     return shard_groups
 
+def get_shard_number(replica):
+    global view_list, shard_count
+
+    return view_list.index(replica) % shard_count 
+
+def key_shard_desination(key):
+    global view_list, hash_ring, shard_count
+
+    return view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
+
+
+
 
 
 # Create a shard group, this is the group that this repllica will be in
@@ -91,6 +97,13 @@ else:
     shard_groups = None
 
 
+# Create a shard number, this is the group number that this replica will be in
+if shard_count is not None:
+    shard_number = view_list.index(my_socket_address) % shard_count 
+    print(f"{my_socket_address} is in shard group {shard_number}")
+else:
+    shard_number = None
+    print(f"No shard_count, I'm not apart of any shard group yet ...")
 
 
 
@@ -448,7 +461,7 @@ def put_key_value(key):
     global key_value_store, vector_clock
 
     # Hash the key
-    key_shard_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
+    key_shard_destination = key_shard_desination(key)
     print(f"Key: {key} will go to shard group {key_shard_destination}")
 
     #---- PROXY CODE ----
@@ -589,7 +602,7 @@ def get_key_value(key):
     global key_value_store, vector_clock
 
     # Hash the key
-    key_shard_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
+    key_shard_destination = key_shard_desination(key)
     print(f"Key: {key} is in shard group {key_shard_destination}")
 
     #---- ACT AS PROXY ----
@@ -671,7 +684,7 @@ def delete_key_value(key):
     global key_value_store, vector_clock
 
     # Hash the key
-    key_shard_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
+    key_shard_destination = key_shard_desination(key)
     print(f"Key: {key} is in shard group {key_shard_destination}")
 
     #---- ACT AS PROXY ----
@@ -947,7 +960,7 @@ def get_key_value_store_size():
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                                    /shard/add-member/<ID> endpoint                 
-#                                                           TODO: OPTIMIZE, IF YOU ALREADY GOT KVS, VC, SHARD_GROUPS, SHARD_COUNT FROM A REPLICA, DON'T ACCEPT ANOTHER ONE (waste of time)
+#                                                           TODO: INCORPORATE THE CASE OF MOVING AN ALREADY EXISTING REPLICA INTO A DIFFERENT SHARD (ONLY IMPLEMENTED A NEW REPLICA GETTING ADDED TO A NEW SHARD)
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 def broadcast_add_member(shard_id, socket_address):
@@ -1027,7 +1040,7 @@ def add_member(ID):
         broadcast_add_member(ID, new_socket_address)
 
     # If ID is my shard group, send a PUT request to new_socket_address in /populate endpoint. Send KVS and VC
-    if ID == shard_number:
+    if ID == shard_number and new_socket_address != my_socket_address:
         try:
             data = {'kvs': key_value_store, 'vc': vector_clock, 'shard-groups': shard_groups, 'shard-count': shard_count, 'shard-number':shard_number}
             url = f"http://{new_socket_address}/populate"
@@ -1101,179 +1114,17 @@ def populate():
 
 
 
+
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                                            /shard/reshard endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
-# TODO: FINISH!!!!!!
-# Only the leader (aka replica that recieved a reshard from client uses this)
-def start_reshard_leader(new_shard_count):
-    # Get globals
-    global shard_groups, view_list, my_socket_address, shard_groups, shard_count, shard_number, key_value_store, vector_clock
-
-    # Update shard_count
-    shard_count = new_shard_count
-
-    # Update shard_number
-    shard_number = view_list.index(my_socket_address) % shard_count 
-
-    # Update consistent hash ring with new view_list
-    hash_ring = ConsistentHashRing(view_list)
-
-    # Make new a new shard_group
-    make_shard_groups()
-
-    # Send new shard_groups & shard_count to everyone
-    for replica in view_list[:]:
-        if replica != my_socket_address:
-            try:
-                data = {'shard-groups': shard_groups, 'shard-count': shard_count}
-                url = f"http://{replica}/stard/new-shard-group"
-                requests.put(url, json=data, timeout=5)
-            except requests.exceptions.RequestException as e:
-                print(f"Exception caught in start_reshard_leader() to {replica}: {e}")  #TODO: catch bad replicas and delete broadcast
-
-    # Go through each key in kvs
-    for key, value in key_value_store[:]:
-
-        # Find out what shard group this key belongs to 
-        key_shard_destination = view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
-
-        # Tell everyone in key_destination to unconditionally add this to their kvs
-        for replica in shard_groups[key_shard_destination][:]:
-            if replica != my_socket_address:
-                try:
-                    data = {'key': key, 'value': value}
-                    url = f"http://{replica}/shard/redistributed-key"
-                    result = requests.put(url, json=data, timeout=5)
-                    # Check response
-                    if result.status_code != 200:
-                        # TODO: catch unexpected behavior
-                        pass
-                except requests.exceptions.RequestException as e:
-                    print(f"Exception caught in start_reshard_leader() to {replica}: {e}, unable to redistribute a key")  #TODO: catch bad replicas and delete broadcast
-
-        # If key_desination is not my shard-number, delete from my kvs
-        if key_shard_destination != shard_number:
-            del key_value_store[key]
-
-    # Send everyone your vc 
-    for replica in view_list[:]:
-        if replica != my_socket_address:
-            try:
-                data = {'vc': vector_clock}
-                url = f"http://{replica}/shard/vector-clock/synchronization"
-                result = requests.put(url, json=data, timeout=5)
-                if result.status_code != 200:
-                    # TODO: catch unexpected behavior
-                        pass
-            except requests.exceptions.RequestException as e:
-                print(f"Exception caught in start_reshard_leader() to {replica}: {e}, unable to redistribute a key")  #TODO: catch bad replicas and delete broadcast
-
-    # Done ...
-
-
-
-
-
-# Synnchronizing vector clocks
-@app.route('/shard/vector-clock/synchronization', methods=['PUT'])
-def vector_clock_synchronization():
-    # Get globals
-    global vector_clock
-
-    # Get data
-    data = request.get_json()
-
-    # Check that vc is in data
-    if 'vc' not in data:
-        make_response(jsonify({'error': 'vc not in data'}), 400)
-
-    recieved_vc = data.get('vc')
-
-    # Merge vector clocks
-    merge_vector_clocks(recieved_vc)
-
-    # Return 200
-    make_response(jsonify({'result': 'vector clocks merged'}), 200)
-
-
-# Redistributing key:value pairs
-@app.route('/shard/redistributed-key', methods=['PUT'])
-def redistributed_key():
-    # Get globals
-    global key_value_store
-
-    # Get data
-    data = request.get_json()
-
-    # Check if key is in data
-    if 'key' not in data:
-        make_response(jsonify({'error': 'key not in data'}), 400)
-    
-    key = data.get('key')
-
-    # Check if value is in data
-    if 'value' not in data:
-        make_response(jsonify({'error': 'value not in data'}), 400)
-    
-    value = data.get('value')
-
-    # Put key:value into kvs
-    key_value_store[key] = value
-
-    # Return with 200
-    make_response(jsonify({'result': f'unconditionally added {key}:{value} to kvs'}), 200)
-
-
-
-
-
-
-
-
-# TODO: FINISH!!!!!!
-# Only the sheep (aka replica that recieved a reshard from a replica)
-@app.route('/shard/new-shard-group', methods=['PUT'])
-def start_reshard_sheep():
-    # Get globals
-    global key_value_store, shard_groups, shard_count, shard_number
-
-    # Get data
-    data = request.get_json()
-
-    # Check if shard-groups is in data
-    if 'shard-groups' not in data:
-        make_response(jsonify({'error': 'shard-groups not in data'}), 400)
-    
-    # Update shard_groups
-    shard_groups = data.get('shard-groups')
-
-    # Check if shard-count is in data
-    if 'shard-count' not in data:
-        make_response(jsonify({'error': 'shard-count not in data'}), 400)
-    
-    # Update shard_count
-    shard_count = data.get('shard-count')
-
-    # Update shard-number
-    shard_number = view_list.index(my_socket_address) % shard_count 
-
-    # Update consistent hashing 
-
-    # Go through each key in kvs
-
-    # Send vc to everyone
-    pass
-
-
-
-
 
 @app.route('/shard/reshard', methods=['PUT'])
 def reshard():
+    print(f"Made it to reshard, leader")
     # Get globals
     global view_list
 
@@ -1288,7 +1139,11 @@ def reshard():
     if 'shard-count' not in data:
         return make_response(jsonify({'error': 'PUT request does not contain shard-count'}), 400) #TODO: might have to change this response to something else
 
-    new_shard_count = data.get('shard-count')
+    new_shard_count_str = data.get('shard-count')
+    try:
+        new_shard_count = int(new_shard_count_str)
+    except ValueError:
+        print("SHARD_COUNT is not a valid integer.")
     
     max_shard_groups = math.floor(len(view_list) / 2) # if you divide by 2, that's how many groups of two you can have (take the floor for odd numbers aka 1 group of 3)
 
@@ -1296,17 +1151,143 @@ def reshard():
         return make_response(jsonify({"error": "Not enough nodes to provide fault tolerance with requested shard count"}),400)
 
     # Proceed with resharding ....
-    start_reshard_leader(new_shard_count)
+    print(f"New shard count: {new_shard_count}")
+    start_reshard(new_shard_count)
 
     # Make response
     return make_response(jsonify({"result": "resharded"}), 200)
 
 
+def start_reshard(new_shard_count):
+    # Get globals 
+    global view_list, shard_groups, shard_count, hash_ring, shard_number, key_value_store
+
+    # Make a new hash_ring
+    hash_ring = ConsistentHashRing(view_list)
+
+    # Make a local kvs copy that holds the entire store
+    entire_kvs_copy = {}
+
+    # Try to contact at least 1 person from each shard
+    for i in range(shard_count):
+        print(f"Trying to contact someone in shard group: {i}")
+        for replica in shard_groups[i][:]:
+            if replica != my_socket_address:
+                try:
+                    # Get the kvs & vc from each shard
+                    url = f"http://{replica}/get-kvs-vc"
+                    response = requests.get(url)
+                    if response.status_code != 200:
+                        # Unexpected behavior
+                        continue
+                    else:
+                        # Get data
+                        data = response.json()
+
+                        # Check that kvs and vc is in data
+                        if 'kvs' not in data and 'vc' not in data:
+                            continue                #Unexpected behavior
+
+                        entire_kvs_copy.update(data.get('kvs'))
+                        merge_vector_clocks(data.get('vc'))
+                        break
+                except requests.exceptions.RequestException as e:
+                    print(f'Unablel to get {replica} information in reshard: {e}')      #TODO: delete broadcast!!!!
+
+    # Update shard_count
+    shard_count = new_shard_count
+
+    # Now parition the kvs into the new shard count
+    partitioned_kvs = []
+
+    # Initialize the partitioned kvs 
+    for i in range(new_shard_count):
+        partitioned_kvs.append({})  # Initialize an empty dictionary for each shard
+        print(f"Partitioned_kvs: {partitioned_kvs}")
+
+    # Now iterate over the entire kvs and split data into the partitioned kvs
+    for key, value in entire_kvs_copy.items():
+        # Find out where this key:value will go 
+        key_shard_destination = key_shard_desination(key)
+        # key_shard_destination = get_shard_group(hash_ring.hash_key_to_node(key))
+        
+        # Insert into correct partition
+        partitioned_kvs[key_shard_destination][key] = value
+
+    
+    # Now partition the new shard groups
+    shard_groups.clear()
+    shard_groups = make_shard_groups()
+    print(f"View for new shard groups: {view_list}")
+    print(f"New shard groups in reshard: {shard_groups}")
+
+    # Now send new info to each shard
+    for replica in view_list[:]:
+        if replica == my_socket_address:
+            # Update shard-number
+            # shard_number = view_list.index(my_socket_address) % shard_count 
+            shard_number = get_shard_number(my_socket_address)
+
+            # Update kvs
+            key_value_store = partitioned_kvs[shard_number]
+        else:
+            try:
+                # Find out what shard-group this replica is in 
+                # replica_shard_number = view_list.index(replica) % shard_count 
+                replica_shard_number = get_shard_number(replica)
+                url = f"http://{replica}/reshard-sheep"
+                data = {'kvs': partitioned_kvs[replica_shard_number], 'vc': vector_clock, 'shard-groups': shard_groups, 'shard-count': shard_count}
+                response = requests.put(url, json=data, timeout=10)
+                if response.status_code != 200:
+                    print(f"Unexpected behavior from {replica}, {response.status_code}")
+                    pass #TODO: unexpected behavior
+            except requests.exceptions.RequestException as e:
+                print(f'cannot send new data for reshard to {replica}: {e}')
+                #TODO: delete broadcast
 
 
+@app.route('/reshard-sheep', methods=['PUT'])
+def sheep_reshard():
+    # Get globals
+    global vector_clock, key_value_store, shard_groups, shard_count, shard_number, hash_ring
 
+    # Get data
+    data =  request.get_json()
 
+    # Check that vc, kvs, shard-groups, shard-count is in data
+    if 'kvs' not in data or 'vc' not in data or 'shard-groups' not in data or 'shard-count' not in data:
+       return make_response(jsonify({'error': 'Not all data is provided'}), 400)
 
+    # Get new vc, kvs, shard-groups, shard-count & update
+    vector_clock.clear()
+    vector_clock = data.get('vc')
+
+    key_value_store.clear()
+    key_value_store = data.get('kvs')
+
+    shard_groups.clear()
+    shard_groups_str = data.get('shard-groups')
+    shard_groups = {int(k): v for k, v in shard_groups_str.items()} # convert string to ints
+    print(f"Shard-sheep, shard-groups: {shard_groups}")
+
+    shard_count_str = data.get('shard-count')             #TODO: turn shard-count into int
+    shard_count = int(shard_count_str)
+
+    # Update shard-number & hash-ring
+    # shard_number = view_list.index(my_socket_address) % shard_count 
+    shard_number = get_shard_number(my_socket_address)
+    hash_ring = ConsistentHashRing(view_list)
+
+    print(f"Shard sheep update: {shard_groups}")
+    # Return response
+    return make_response(jsonify({'result': 'Updated'}), 200)
+
+@app.route('/get-kvs-vc', methods=['GET'])
+def get_kvs_vc():
+    # Get globals
+    global key_value_store, vector_clock
+
+    return make_response(jsonify({'kvs': key_value_store, 'vc': vector_clock}), 200)
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
