@@ -81,7 +81,7 @@ def get_shard_number(replica):
 
     return view_list.index(replica) % shard_count 
 
-def key_shard_desination(key):
+def get_key_shard_desination(key):
     global view_list, hash_ring, shard_count
 
     return view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
@@ -350,94 +350,55 @@ def merge_vector_clocks(VC2):
 # HELPER FUNCTIONS:            BROADCASTING KVS UPDATES WITHIN SHARD GROUPS
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
-
-# This function will broadcast to everyone in your shard group to PUT a key:value into the key-value-store
-def broadcast_kvs_put(key, value):
+def broadcast_kvs(method, key, value=None):
     # Get globals
     global shard_groups, my_socket_address, shard_number
 
     # Create a list to hold replicas that are down
     down_replicas = []
 
-    # Broadcast to everyone in shard group (skip yourself), to PUT a key in kvs
+    # Broadcast to everyone in shard group (skip yourself), to PUT/DELETE a key in kvs
     for replica in shard_groups[shard_number][:]:
         if replica != my_socket_address:
             while True:
                 try:
                     # Create request
                     url = f"http://{replica}/kvs/{key}"
-                    data = {'value': value, 'causal-metadata': vector_clock}
+
+                    # Create data
+                    if method == 'PUT':
+                        data = {'value': value, 'causal-metadata': vector_clock}
+                    else: # method == DELETE
+                        data = {'causal-metadata': vector_clock}
+
+                    # Create header
                     headers = {'Replica': my_socket_address}
+
+                    # Make request
                     response = requests.put(url, json=data, headers=headers,timeout=5)
+
                     # Dependencies are NOT met, sleep and try again
                     if response.status_code == 503:
                         time.sleep(1)
                         continue
                     # Dependencies ARE met, break the while loop & continue the for-loop
-                    elif response.status_code == 200 or response.status_code == 201:
-                        break
-                    
-                    # Unexpected behavior
-                    else:
-                        print(f"Unexpected behavior, status code: {response.status_code}")
-                except requests.RequestException:
-                    # Found down replica, delete from view list & add to down_replicas
-                    if replica in view_list and replica != my_socket_address:
-                        view_list.remove(replica)
-                    down_replicas.append(replica)
-                    break  # Continue to for loop iteration and break while loop iteration(aka next replica)
-
-    # If you find any replicas that are down, broadcast it  
-    if len(down_replicas) > 0 and len(view_list) != 1:
-        for replica in down_replicas:
-            broadcast_delete_view(replica)
-
-# This function will broadcast to everyone in your shard group to DELETE a key:value into the key-value-store
-def broadcast_kvs_delete(key):
-    # Get globals
-    global view_list, my_socket_address
-
-    # Create a list to hold replicas that are down
-    down_replicas = []
-
-    # Broadcast to everyone in your shard group (skip yourself), to DELETE a key in kvs
-    for replica in shard_groups[shard_number][:]:
-        if replica != my_socket_address:
-            while True:
-                try:
-                    # Create request
-                    url = f"http://{replica}/kvs/{key}"
-                    data = {'causal-metadata': vector_clock}
-                    headers = {'Replica': my_socket_address}
-                    response = requests.delete(url, json=data, headers=headers, timeout=5)
-                    # Dependencies are NOT met, sleep and try again
-                    if response.status_code == 503:
-                        time.sleep(1)
-                        continue
-                    # Dependencies ARE met, break the while loop & continue the for-loop
-                    elif response.status_code == 200 or response.status_code == 404:
+                    elif response.status_code == 200 or response.status_code == 201 or response.status_code == 404:
                         break
                     # Unexpected behavior 
                     else:
+                        # raise Exception
                         raise Exception
                 except requests.exceptions.RequestException:
                     # Found down replica, delete from view list & add to down_replicas
                     down_replicas.append(replica)
                     break  # Continue to for loop iteration and break while loop iteration(aka next replica)
-                
-    # if you find any replicas that are down, broadcast it  
-    if len(down_replicas) > 0:
+   
+    # If you find any replicas that are down & you're not alone, broadcast it  
+    if len(down_replicas) > 0 and len(view_list) != 1:
         for replica in down_replicas:
             if replica != my_socket_address:
                 broadcast_delete_view(replica)
-
-
-
-
-
-
-
-
+    pass
 
 
 
@@ -451,106 +412,120 @@ def broadcast_kvs_delete(key):
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
-
-#          ~~~~~~~~~~~~~~~~~~~~~
-#          ~~~~~ PUT logic ~~~~~
-#          ~~~~~~~~~~~~~~~~~~~~~
-@app.route('/kvs/<key>', methods=['PUT'])
+# PUT, GET, DELETE kvs/<key> endpoint
+@app.route('/kvs/<key>', methods=['PUT', 'GET','DELETE'])
 def put_key_value(key):
-    # Get global
-    global key_value_store, vector_clock
-
-    # Hash the key
-    key_shard_destination = key_shard_desination(key)
-    print(f"Key: {key} will go to shard group {key_shard_destination}")
-
-    #---- PROXY CODE ----
-
-    # check if this key is in my shard group
-    if key_shard_destination != shard_number:
-
-        # Make a local variable to track down replcias
-        down_replicas = []
-        response = None
-
-        # Forward to 1 replica in shard group  (NOTE: only forward to 1 because they will broadcast to everyone in their group)
-        for replica in shard_groups[key_shard_destination][:]:
-            try:
-                # Forward request to shard with same shard number as the key
-                print(f"Forwarding request to PUT request to {replica}")
-                url = f"http://{replica}/kvs/{key}"
-                # forward respective method and return response to client
-                response = requests.put(url, json=request.get_json(silent=True))
-                # break out of loop
-                break
-            except requests.exceptions.RequestException as e:
-                # forwarding request failed
-                print(f'Forwarding request failed, could not connect to {replica}: {e}')
-                # Remove replica from view_list
-                view_list.remove(replica)
-                # Add replica is down_replicas
-                down_replicas.append(replica)
-                continue
-        
-        # Broadcast to everyone that a replica is down
-        if len(down_replicas) > 0:
-            for replica in down_replicas:
-                if replica != my_socket_address:
-                    broadcast_delete_view(replica)
-
-        return response.content, response.status_code, response.headers.items()
-
-    
-    # Create a local variable
-    status_code = 0
-
-    # Get json data
+    # Get data from json
     data = request.get_json(silent=True)
 
     # Check to see if data is empty
     if data is None:
         return make_response(jsonify({'error': 'data is none'}), 400)
     
-    # Check that value exists in data
-    if 'value' not in data:
-        return make_response(jsonify({'error': 'PUT request does not specify a value'}), 400)
+    # Get method
+    if request.method == 'PUT':
+        method = 'PUT'
+    elif request.method == 'GET':
+        method = 'GET'
+    elif request.method == 'DELETE':
+        method = 'DELETE'
+    else:
+        return make_response(jsonify({'error': 'Server error'}), 500)
+
+    # Process request
+    return process_request(method, key, data)
+
+# Function to handle requests forwarded to other shard groups
+def handle_forwarded_request(method, key):
+    # Make a response variable
+    response = None
+
+    # Find out what shard this key belongs to
+    key_shard_destination = get_key_shard_desination(key)
+
+    # Forward to 1 replica in shard group  (NOTE: only forward to 1 because they will broadcast to everyone in their group)
+    for replica in shard_groups[key_shard_destination][:]:
+        try:
+            # Make a url to replica
+            url = f"http://{replica}/kvs/{key}"
+            # forward respective method and return response to client
+            if method == 'GET':
+                response = requests.get(url, json=request.get_json(silent=True))
+            elif method == 'PUT':
+                response = requests.put(url, json=request.get_json(silent=True))
+            elif method == 'DELETE':
+                response = requests.delete(url, json=request.get_json(silent=True))
+            else:
+                return make_response(jsonify({'error': 'Server error'}), 500)
+            # break out of loop
+            break
+        except requests.exceptions.RequestException as e:
+            # forwarding request failed & the shard-group will catch this error then tell everyone to delete this shard
+            print(f'Forwarding request failed, could not connect to {replica}: {e}')
+            continue
     
-    value = data.get('value')
+    return response.content, response.status_code, response.headers.items()
 
-    # Check that casaul meta data exists in json
-    if 'causal-metadata' not in data:
-        return make_response(jsonify({'error': 'PUT request does not contain causal-metadata'}), 400) #TODO: might have to change this response to something else
+# Function to handle request processing logic
+def process_request(method, key, data=None):
+    # Get global
+    global key_value_store, vector_clock
 
-    causal_metadata = data.get('causal-metadata')
+    # Hash the key
+    key_shard_destination = get_key_shard_desination(key)
 
-    # Check header to see if request is from a client
-    if 'Replica' not in request.headers:
+    # Check if key belongs to my shard group
+    if key_shard_destination != shard_number:
+        return handle_forwarded_request(method, key)
+    
+    # Create a local status code variable 
+    status_code = 0
 
-        # Check dependencies
-        if dependency_test_client(causal_metadata):
-            
+    # Create a local boolean if its from a client or replica
+    from_client = False
+
+#          ~~~~~~~~~~~~~~~~~~~~~
+#          ~~~~~ PUT logic ~~~~~
+#          ~~~~~~~~~~~~~~~~~~~~~
+    if method == 'PUT':
+        # Check that value exists in data
+        if 'value' not in data:
+            return make_response(jsonify({'error': 'PUT request does not specify a value'}), 400)
+        value = data.get('value')
+
+        # Check that casaul meta data exists in json
+        if 'causal-metadata' not in data:
+            return make_response(jsonify({'error': 'PUT request does not contain causal-metadata'}), 400) 
+        causal_metadata = data.get('causal-metadata')
+
+        # Check header to see if request is from a client
+        if 'Replica' not in request.headers:
+            dependency = dependency_test_client(causal_metadata)
+            from_client = True
+        else: # From a replica
+            dependency = dependency_test_replica(causal_metadata, request.headers.get('Replica'))
+
+        if dependency:    
             # Check if key is to long
             if len(key) > 50:
                 return make_response(jsonify({'error': 'Key is too long'}), 400)
             
             # Check if key exists or not in kvs
             if key in key_value_store:
-                status_code = 200 # replaced
+                status_code = 200
             else:
-                status_code = 201 # created
+                status_code = 201
 
             # Write to key value store
             key_value_store[key] = value
-            print(f"Adding {key}:{value} to kvs ... received from client")
 
             # Merge vector clocks
             merge_vector_clocks(causal_metadata)
 
-            # Update vector clock
-            update_vector_clock()
-
-            # Broadcast to everyone that a change has been made
-            broadcast_kvs_put(key, value)
+            # Update vector clock & broadcast to everyone if from client
+            if from_client:
+                update_vector_clock()
+                broadcast_kvs('PUT', key, value)
 
             # Reuslt was replaced
             if status_code == 200:
@@ -558,239 +533,68 @@ def put_key_value(key):
             # Result was created
             return make_response(jsonify({"result": "created", "causal-metadata": vector_clock}), 201)
         else:
-            # Dependencies are NOT met
             return make_response(jsonify({"error": "Causal dependencies not satisfied; try again later"}), 503)
-
-    else: # From a replica
         
-        # Dependency check for replica
-        if dependency_test_replica(causal_metadata, request.headers.get('Replica')):
-
-            # Check if key is to long
-            if len(key) > 50:
-                return make_response(jsonify({'error': 'Key is too long'}), 400)
-            
-            # Check if key exists in store
-            if key in key_value_store:
-                status_code = 200 # replaced
-            else:
-                status_code = 201 # created
-
-            # Write to key value store
-            key_value_store[key] = value
-            print(f"Adding {key}:{value} to kvs ... received from replica {request.headers.get('Replica')}")
-
-            # Merge vector clocks
-            merge_vector_clocks(causal_metadata)
-
-            # Reuslt was replaced
-            if status_code == 200:
-                return make_response(jsonify({"result": "replaced", "causal-metadata": vector_clock}), 200)
-            # Result was created
-            return make_response(jsonify({"result": "created", "causal-metadata": vector_clock}), 201)
-        else:
-            return make_response(jsonify({"error": "Causal dependencies not satisfied; try again later"}), 503)
-
-
 #          ~~~~~~~~~~~~~~~~~~~~~
 #          ~~~~~ GET logic ~~~~~
 #          ~~~~~~~~~~~~~~~~~~~~~
-@app.route('/kvs/<key>', methods=['GET'])
-def get_key_value(key):
+    elif method == 'GET':
+        # Now check that casaul meta data exists in json
+        if 'causal-metadata' not in data:
+            return make_response(jsonify({'error': 'GET request does not contain causal-metadata'}), 400) 
+        causal_metadata = data.get('causal-metadata')
 
-    # Get globals
-    global key_value_store, vector_clock
+        # Check dependency test (only clients use this)
+        dependency = dependency_test_client(causal_metadata)
 
-    # Hash the key
-    key_shard_destination = key_shard_desination(key)
-    print(f"Key: {key} is in shard group {key_shard_destination}")
+        if dependency:
+            # Merge the vector clocks
+            merge_vector_clocks(causal_metadata)
 
-    #---- ACT AS PROXY ----
-
-    # check if this key is in my shard group
-    if key_shard_destination != shard_number:
-
-        # Make a local variable to track down replcias
-        down_replicas = []
-        response = None
-
-        # Forward to 1 replica in shard group  (NOTE: only forward to 1 because they will broadcast to everyone in their group)
-        for replica in shard_groups[key_shard_destination][:]:
-            try:
-                # Forward request to shard with same shard number as the key
-                print(f"Forwarding request to GET request to {replica}")
-                url = f"http://{replica}/kvs/{key}"
-                # forward respective method and return response to client
-                response = requests.get(url, json=request.get_json(silent=True))
-                # break out of loop
-                break
-            except requests.exceptions.RequestException as e:
-                # forwarding request failed
-                print(f'Forwarding request failed, could not connect to {replica}: {e}')
-                # Remove replica from view_list
-                view_list.remove(replica)
-                # Add replica is down_replicas
-                down_replicas.append(replica)
-                continue
-        
-        # Broadcast to everyone that a replica is down
-        if len(down_replicas) > 0:
-            for replica in down_replicas:
-                if replica != my_socket_address:
-                    broadcast_delete_view(replica)
-
-        return response.content, response.status_code, response.headers.items()
-
-
-    # --- REPLICA ---
-    # Get json data
-    data = request.get_json(silent=True)
-
-    # Check to see if data is correct
-    if data is None:
-        return make_response(jsonify({'error': 'data is none'}), 400)
-    
-    # Now check that casaul meta data exists in json
-    if 'causal-metadata' not in data:
-        return make_response(jsonify({'error': 'PUT request does not contain causal-metadata'}), 400) #TODO: might have to change this response to something else
-
-    causal_metadata = data.get('causal-metadata')
-
-    # Check dependency test (only clients use this)
-    if dependency_test_client(causal_metadata):
-
-        # Merge the vector clocks
-        merge_vector_clocks(causal_metadata)
-
-        # Found key:value
-        if key in key_value_store:
-            return make_response(jsonify({"result": "found", "value": key_value_store[key], "causal-metadata": vector_clock}), 200)
-        # Does not exist
+            # Found key:value
+            if key in key_value_store:
+                return make_response(jsonify({"result": "found", "value": key_value_store[key], "causal-metadata": vector_clock}), 200)
+            else: # Does not exist
+                return make_response(jsonify({"error": "Key does not exist"}), 404)
+            
         else: 
-            return make_response(jsonify({"error": "Key does not exist"}), 404)
-        
-    else: 
-        # Dependencies are NOT met
-        return make_response(jsonify({"error": "Causal dependencies not satisfied; try again later"}), 503)
-    
-
+            # Dependencies are NOT met
+            return make_response(jsonify({"error": "Causal dependencies not satisfied; try again later"}), 503)
 #          ~~~~~~~~~~~~~~~~~~~~~~
 #          ~~~~ DELETE logic ~~~~
 #          ~~~~~~~~~~~~~~~~~~~~~~
-@app.route('/kvs/<key>', methods=['DELETE'])
-def delete_key_value(key):
+    elif method == 'DELETE':
+        # Check that casaul meta data exists in json
+        if 'causal-metadata' not in data:
+            return make_response(jsonify({'error': 'DELETE request does not contain causal-metadata'}), 400) 
+        causal_metadata = data.get('causal-metadata')
 
-    # Get globals
-    global key_value_store, vector_clock
-
-    # Hash the key
-    key_shard_destination = key_shard_desination(key)
-    print(f"Key: {key} is in shard group {key_shard_destination}")
-
-    #---- ACT AS PROXY ----
-
-    # check if this key is in my shard group
-    if key_shard_destination != shard_number:
-
-        # Make a local variable to track down replcias
-        down_replicas = []
-        response = None
-
-        # Forward to 1 replica in shard group  (NOTE: only forward to 1 because they will broadcast to everyone in their group)
-        for replica in shard_groups[key_shard_destination][:]:
-            try:
-                # Forward request to shard with same shard number as the key
-                url = f"http://{replica}/kvs/{key}"
-                # forward respective method and return response to client
-                response = requests.delete(url, json=request.get_json(silent=True))
-                # break out of loop
-                break
-            except requests.exceptions.RequestException as e:
-                # forwarding request failed
-                print(f'Forwarding request failed, could not connect to {replica}: {e}')
-                # Remove replica from view_list
-                view_list.remove(replica)
-                # Add replica is down_replicas
-                down_replicas.append(replica)
-                continue
-        
-        # Broadcast to everyone that a replica is down
-        if len(down_replicas) > 0:
-            for replica in down_replicas:
-                if replica != my_socket_address:
-                    broadcast_delete_view(replica)
-
-        return response.content, response.status_code, response.headers.items()
+        # Check header to see if request is from a client
+        if 'Replica' not in request.headers:
+            dependency = dependency_test_client(causal_metadata)
+            from_client = True
+        else: # From a replica
+            dependency = dependency_test_replica(causal_metadata, request.headers.get('Replica'))
 
 
-    # --- REPLICA ---
-
-    # Get json data
-    data = request.get_json(silent=True)
-
-    # Check to see if data is correct
-    if data is None:
-        return make_response(jsonify({'error': 'data is none'}), 400)
-    
-    # Check that casaul meta data exists in json
-    if 'causal-metadata' not in data:
-        return make_response(jsonify({'error': 'PUT request does not contain causal-metadata'}), 400) #TODO: might have to change this response to something else
-
-    causal_metadata = data.get('causal-metadata')
-
-    # Check header to see if request is from a client
-    if 'Replica' not in request.headers:
-
-        # Check dependencies
-        if dependency_test_client(causal_metadata):
-                        
-            # Check if key exists in store
+        if dependency:
+            # Check if key exists in the store
             if key not in key_value_store:
                 return make_response(jsonify({"error": "Key does not exist"}), 404)
-
+            
             # Delete key
             del key_value_store[key]
 
             # Merge vector clocks
             merge_vector_clocks(causal_metadata)
-
-            # Update vector clock 
-            update_vector_clock()
-
-            # Broadcast to everyone that a change has been made
-            broadcast_kvs_delete(key)
-
-            # Result was deleted
-            return make_response(jsonify({"result": "deleted", "causal-metadata": vector_clock}), 200)
-        else:
-            # Dependencies are NOT met
-            return make_response(jsonify({"error": "Causal dependencies not satisfied; try again later"}), 503)
-
-    else: # From a replica
-        
-        # Dependency check for replica
-        if dependency_test_replica(causal_metadata, request.headers.get('Replica')):
             
-            # Check if key is in the store
-            if key not in key_value_store:
-                return make_response(jsonify({"error": "Key does not exist"}), 404)
-
-            # Delete key from store
-            del key_value_store[key]
-
-            # Merge vector clocks
-            merge_vector_clocks(causal_metadata)
-
-            # Result was deleted
+            # Update vector clock & broadcast to everyone if from client
+            if from_client:
+                update_vector_clock()
+                broadcast_kvs('DELETE', key)
             return make_response(jsonify({"result": "deleted", "causal-metadata": vector_clock}), 200)
         else:
-            # Dependencies are NOT met
             return make_response(jsonify({"error": "Causal dependencies not satisfied; try again later"}), 503)
-
-
-
-
-
 
 
 
@@ -960,7 +764,6 @@ def get_key_value_store_size():
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                                    /shard/add-member/<ID> endpoint                 
-#                                                           TODO: INCORPORATE THE CASE OF MOVING AN ALREADY EXISTING REPLICA INTO A DIFFERENT SHARD (ONLY IMPLEMENTED A NEW REPLICA GETTING ADDED TO A NEW SHARD)
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 def broadcast_add_member(shard_id, socket_address):
@@ -1137,7 +940,7 @@ def reshard():
     
     # Check that casaul meta data exists in json
     if 'shard-count' not in data:
-        return make_response(jsonify({'error': 'PUT request does not contain shard-count'}), 400) #TODO: might have to change this response to something else
+        return make_response(jsonify({'error': 'PUT request does not contain shard-count'}), 400) 
 
     new_shard_count_str = data.get('shard-count')
     try:
@@ -1192,7 +995,7 @@ def start_reshard(new_shard_count):
                         merge_vector_clocks(data.get('vc'))
                         break
                 except requests.exceptions.RequestException as e:
-                    print(f'Unablel to get {replica} information in reshard: {e}')      #TODO: delete broadcast!!!!
+                    print(f'Unable to get {replica} information in reshard: {e}')      #TODO: delete broadcast!!!!
 
     # Update shard_count
     shard_count = new_shard_count
@@ -1208,7 +1011,7 @@ def start_reshard(new_shard_count):
     # Now iterate over the entire kvs and split data into the partitioned kvs
     for key, value in entire_kvs_copy.items():
         # Find out where this key:value will go 
-        key_shard_destination = key_shard_desination(key)
+        key_shard_destination = get_key_shard_desination(key)
         # key_shard_destination = get_shard_group(hash_ring.hash_key_to_node(key))
         
         # Insert into correct partition
@@ -1270,7 +1073,7 @@ def sheep_reshard():
     shard_groups = {int(k): v for k, v in shard_groups_str.items()} # convert string to ints
     print(f"Shard-sheep, shard-groups: {shard_groups}")
 
-    shard_count_str = data.get('shard-count')             #TODO: turn shard-count into int
+    shard_count_str = data.get('shard-count')             
     shard_count = int(shard_count_str)
 
     # Update shard-number & hash-ring
