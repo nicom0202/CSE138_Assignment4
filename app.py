@@ -10,49 +10,6 @@ app = Flask(__name__)
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
-#      GET ENVIRONMENT VARIABLES 
-# ----------------------------------------------------------------------------------------------------------------
-# ================================================================================================================
-
-# Get environment variable for socket address 
-my_socket_address = os.getenv('SOCKET_ADDRESS')
-
-# Get environment variable for view list
-my_view = os.getenv('VIEW')
-
-# Get environment variable for shard count
-shard_count_str = os.getenv('SHARD_COUNT')
-
-if shard_count_str is not None:
-    try:
-        shard_count = int(shard_count_str)
-    except ValueError:
-        print("SHARD_COUNT is not a valid integer.")
-else:
-    print("SHARD_COUNT environment variable is not set.")
-    shard_count = None
-
-
-# ================================================================================================================
-# ----------------------------------------------------------------------------------------------------------------
-# INITIALIZE GLOABLS:            VIEW_LIST,   VECTOR_CLOCK,   KEY_VALUE_STORE,    SHARD_NUMBER
-# ----------------------------------------------------------------------------------------------------------------
-# ================================================================================================================
-
-# Create a view list to keep track of running replicas
-view_list = my_view.split(",") if my_view else []
-view_list.sort()
-
-# Create vector clock that has everyone in your view list
-vector_clock = {key: 0 for key in view_list}
-
-# Create a key value store dictionary
-key_value_store = {} 
-
-
-
-# ================================================================================================================
-# ----------------------------------------------------------------------------------------------------------------
 # INITIALIZE GLOABLS:                       SHARD_GROUPS
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
@@ -88,88 +45,31 @@ def get_key_shard_desination(key):
 
 
 
-
-
-# Create a shard group, this is the group that this repllica will be in
-if shard_count is not None:
-    shard_groups = make_shard_groups()
-else:
-    shard_groups = None
-
-
-# Create a shard number, this is the group number that this replica will be in
-if shard_count is not None:
-    shard_number = view_list.index(my_socket_address) % shard_count 
-    print(f"{my_socket_address} is in shard group {shard_number}")
-else:
-    shard_number = None
-    print(f"No shard_count, I'm not apart of any shard group yet ...")
-
-
-
-# ================================================================================================================
-# ----------------------------------------------------------------------------------------------------------------
-# HELPER FUNCTIONS:                  CONSISTENT HASHING
-# ----------------------------------------------------------------------------------------------------------------
-# ================================================================================================================
-
-hash_ring = ConsistentHashRing(view_list)
-
-
-
-
-
-
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 # HELPER FUNCTIONS:                   BROADCASTING UPDATES TO VIEW
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
-
-# This function will broadcast my_socket_address to everyone in my view_list
-def broadcast_my_view():
+def broadcast_view(method, replica_address):
     # Get gloabls
     global view_list, my_socket_address
 
-    # Broadcast to everyone to PUT your socket-address in other replicas view list
+    # Broadcast to everyone 
     for replica in view_list[:]:
         if replica != my_socket_address:
                 try:
-                    data = {'socket-address': my_socket_address}
+                    data = {'socket-address': replica_address}
                     url = f"http://{replica}/view"
-                    requests.put(url, json=data, timeout=1)
+                    if method == 'PUT':
+                        requests.put(url, json=data, timeout=1)
+                    elif method == 'DELETE':
+                        requests.delete(url, json=data, timeout=5)
+                    else:
+                        return make_response(jsonify({'error': 'Server error'}), 500)
                 except requests.exceptions.RequestException as e:
-                    # No need to delete/broadcast replica bc it will eventually get detected and broadcasted 
-                    print(f"Exception caught in broadcast_my_view() to {replica}: {e}")
-
-# This function will broadcast a /view DELETE to everyone (aka found a down replica, tell everyone to delete it)
-def broadcast_delete_view(bad_replica_address):
-    # Get globals
-    global view_list
-    
-    # Broadcast to everyone in your view that you found a down replica
-    for replica in view_list[:]:
-        if replica != my_socket_address:
-            try:
-                data = {'socket-address': bad_replica_address}
-                url = f"http://{replica}/view"
-                requests.delete(url, json=data, timeout=5)
-            except requests.exceptions.RequestException as e:
-                # This will eventually get caught again when someone tries to broadcast another update
-                print(f"Failed to connect to {replica} in delete broadcast ... error message: {e}")
-
-
-
-
-
-
-
-
-
-
-
+                    # No need to delete/broadcast replica bc it will eventually get detected kvs broadcast
+                    print(f"Exception caught in broadcast_view() to {replica}: {e}")
 
 
 
@@ -179,90 +79,64 @@ def broadcast_delete_view(bad_replica_address):
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
-
-#           ~~~~~~~~~~~~~~~~~~~~~
-#          ~~~~~ /view PUT ~~~~~~~
-#           ~~~~~~~~~~~~~~~~~~~~~
-@app.route('/view', methods=['PUT'])
-def add_replica_to_view():  
+@app.route('/view', methods=['PUT','GET','DELETE'])
+def view():
     # Get globals
     global view_list
 
-    # Get data from request
-    data = request.get_json()
-
-    # Check if data is None or empty
-    if data is None:
-        return make_response(jsonify({'error': 'Bad request, empty data'}), 400)
-
-    new_socket_address = data.get('socket-address')
-
-    # Check if socket-address exists in the data
-    if new_socket_address is None:
-        return make_response(jsonify({'error': 'Bad request, missing socket-address'}), 400)
-
-    # Check if the socket already exists in their view
-    if new_socket_address in view_list:
-        return make_response(jsonify({"result": "already present"}), 200)
-
-
-    # Add new replica to view list
-    if new_socket_address not in view_list:
-        view_list.append(new_socket_address)
-        view_list.sort()
-        print(f"Adding {new_socket_address} to my view ... my view: {view_list}")
-
-    # Add new replica address in vector clock
-    if new_socket_address not in vector_clock:
-        vector_clock[new_socket_address] = 0
-
-    # Make response
-    return make_response(jsonify(data={"result": "added"}), 201)
-
-
-#           ~~~~~~~~~~~~~~~~~~~~~
-#          ~~~~~ /view GET ~~~~~~~
-#           ~~~~~~~~~~~~~~~~~~~~~
-@app.route('/view', methods=['GET'])
-def get_view():
-    # Get globals
-    global view_list
-    # Make response
-    return make_response(jsonify({"view": view_list}), 200)
-
-
-#           ~~~~~~~~~~~~~~~~~~~~~
-#          ~~~~~ /view DELETE ~~~~
-#           ~~~~~~~~~~~~~~~~~~~~~
-@app.route('/view', methods=['DELETE'])
-def remove_a_replica_from_view():
-    # Get globals
-    global view_list
-
-    # Get data from request
-    data = request.get_json()
-
-    # Check if data is None or empty
-    if data is None:
-        return make_response(jsonify({'error': 'Bad request, empty data'}), 400)
-
-    delete_socket_address = data.get('socket-address')
-
-    # Check if socket-address exists in the data
-    if delete_socket_address is None:
-        return make_response(jsonify({'error': 'Bad request, missing socket-address'}), 400)
-
-    # Check if socket-address exists in your view
-    if delete_socket_address in view_list and delete_socket_address != my_socket_address:
-        view_list.remove(delete_socket_address)
-        hash_ring.remove_node(delete_socket_address)
-        return make_response(jsonify({"result": "deleted"}), 200)
+    # ----- GET logic ------
+    # Check if it's a GET request
+    if request.method == 'GET':
+        return make_response(jsonify({"view": view_list}), 200)
     
-    return make_response(jsonify({"error": "View has no such replica"}), 404)
+    # Get data from request
+    data = request.get_json(silent=True)
+
+    # Check if data is None or empty
+    if data is None:
+        return make_response(jsonify({'error': 'Bad request, empty data'}), 400)
+    
+    # Check if socket-address is in data
+    if 'socket-address' not in data:
+        return make_response(jsonify({'error': 'Bad request, missing socket-address'}), 400)
+    socket_address = data.get('socket-address')
+
+    # Check that socket-address is not None
+    if socket_address is None:
+        return make_response(jsonify({'error': 'Bad request, missing socket-address'}), 400)
+
+    # ----- PUT logic ------
+    if request.method == 'PUT':
+        # Check if the socket already exists in their view
+        if socket_address in view_list:
+            return make_response(jsonify({"result": "already present"}), 200)
 
 
+        # Add new replica to view list
+        if socket_address not in view_list:
+            view_list.append(socket_address)
+            view_list.sort()
 
+        # Add new replica address in vector clock
+        if socket_address not in vector_clock:
+            vector_clock[socket_address] = 0
 
+        # Make response
+        return make_response(jsonify(data={"result": "added"}), 201)
+    
+    # ----- DELETE logic ------
+    elif request.method == 'DELETE':
+        # Check if socket-address exists in the data
+        if socket_address is None:
+            return make_response(jsonify({'error': 'Bad request, missing socket-address'}), 400)
+
+        # Check if socket-address exists in your view
+        if socket_address in view_list and socket_address != my_socket_address:
+            view_list.remove(socket_address)
+            hash_ring.remove_node(socket_address)
+            return make_response(jsonify({"result": "deleted"}), 200)
+    else:
+        make_response(jsonify({'error': 'Server error'}), 500)
 
 
 
@@ -338,13 +212,6 @@ def merge_vector_clocks(VC2):
 
 
 
-
-
-
-
-
-
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 # HELPER FUNCTIONS:            BROADCASTING KVS UPDATES WITHIN SHARD GROUPS
@@ -397,12 +264,8 @@ def broadcast_kvs(method, key, value=None):
     if len(down_replicas) > 0 and len(view_list) != 1:
         for replica in down_replicas:
             if replica != my_socket_address:
-                broadcast_delete_view(replica)
+                broadcast_view('DELETE', replica)
     pass
-
-
-
-
 
 
 
@@ -597,10 +460,6 @@ def process_request(method, key, data=None):
             return make_response(jsonify({"error": "Causal dependencies not satisfied; try again later"}), 503)
 
 
-
-
-
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                                       /shard/ids endpoint
@@ -618,9 +477,6 @@ def get_shard_ids():
 
 
 
-
-
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                                     /shard/node-shard-id endpoint
@@ -633,11 +489,6 @@ def get_node_shard_id():
 
     # Make respone
     return make_response(jsonify({'node-shard-id': shard_number}), 200)
-
-
-
-
-
 
 
 
@@ -666,8 +517,6 @@ def get_shard_members(ID):
     except ValueError:
         # Handle the case where ID cannot be converted to an integer
         return make_response(jsonify({'error': 'No such shard ID exists'}), 404)
-
-
 
 
 
@@ -733,9 +582,9 @@ def get_key_count_at_ID(ID):
 
     # Broadcast bad replicas
     if len(down_replicas) > 0:
-        for replcia in view_list:
+        for replica in view_list:
             if replica != my_socket_address:
-                broadcast_delete_view(replcia)
+                broadcast_view('DELETE', replica)
 
     # Return response
     return make_response(jsonify({'shard-key-count': size}), 200)
@@ -748,15 +597,6 @@ def get_key_value_store_size():
 
     # Return size of key-value-store
     return make_response(jsonify({'size': len(key_value_store)}), 200)
-
-
-
-
-
-
-
-
-
 
 
 
@@ -795,8 +635,7 @@ def broadcast_add_member(shard_id, socket_address):
     if len(down_replicas) > 0:
         for replica in down_replicas:
             if replica != my_socket_address:
-                broadcast_delete_view(replica)
-
+                broadcast_view('DELETE', replica)
 
 
 @app.route('/shard/add-member/<ID>', methods=['PUT'])
@@ -914,16 +753,11 @@ def populate():
 
 
 
-
-
-
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                                            /shard/reshard endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
-
 
 @app.route('/shard/reshard', methods=['PUT'])
 def reshard():
@@ -1092,12 +926,69 @@ def get_kvs_vc():
 
     return make_response(jsonify({'kvs': key_value_store, 'vc': vector_clock}), 200)
 
+
+
+
+# ================================================================================================================
+# ----------------------------------------------------------------------------------------------------------------
+#                                       INITIALIZE GLOABLS
+# ----------------------------------------------------------------------------------------------------------------
+# ================================================================================================================
+# Get environment variable for socket address 
+my_socket_address = os.getenv('SOCKET_ADDRESS')
+
+# Get environment variable for view list
+my_view = os.getenv('VIEW')
+
+# Get environment variable for shard count
+shard_count_str = os.getenv('SHARD_COUNT')
+
+if shard_count_str is not None:
+    try:
+        shard_count = int(shard_count_str)
+    except ValueError:
+        print("SHARD_COUNT is not a valid integer.")
+else:
+    print("SHARD_COUNT environment variable is not set.")
+    shard_count = None
+
+# Create a view list to keep track of running replicas
+view_list = my_view.split(",") if my_view else []
+view_list.sort()
+
+# Create vector clock that has everyone in your view list
+vector_clock = {key: 0 for key in view_list}
+
+# Create a key value store dictionary
+key_value_store = {} 
+
+# Create a shard group, this is the group that this repllica will be in
+if shard_count is not None:
+    shard_groups = make_shard_groups()
+else:
+    shard_groups = None
+
+
+# Create a shard number, this is the group number that this replica will be in
+if shard_count is not None:
+    shard_number = view_list.index(my_socket_address) % shard_count 
+    print(f"{my_socket_address} is in shard group {shard_number}")
+else:
+    shard_number = None
+    print(f"No shard_count, I'm not apart of any shard group yet ...")
+
+# Create hash_ring
+hash_ring = ConsistentHashRing(view_list)
+
+
+
+
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                              INITIALIZE ON STARTUP (ONLY BROADCAST YOUR VIEW) 
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
-broadcast_my_view()
+broadcast_view('PUT', my_socket_address)
 
 
 
