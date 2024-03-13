@@ -16,7 +16,6 @@ app = Flask(__name__)
 
 
 # This function will assign replicas to a shard group
-
 def make_shard_groups():
     # Get globals
     global shard_count, view_list
@@ -33,16 +32,15 @@ def make_shard_groups():
 
     return shard_groups
 
+# This function will get the shard number for a replica
 def get_shard_number(replica):
     global view_list, shard_count
-
     return view_list.index(replica) % shard_count 
 
+# This function will find the shard group that a key will be assigned to
 def get_key_shard_desination(key):
     global view_list, hash_ring, shard_count
-
     return view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
-
 
 
 # ================================================================================================================
@@ -51,6 +49,8 @@ def get_key_shard_desination(key):
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
+
+# This function will broadcast a view update to everyone in the view_list
 def broadcast_view(method, replica_address):
     # Get gloabls
     global view_list, my_socket_address
@@ -72,13 +72,14 @@ def broadcast_view(method, replica_address):
                     print(f"Exception caught in broadcast_view() to {replica}: {e}")
 
 
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                  /view endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
+
+# This endpoint handles all view operations
 @app.route('/view', methods=['PUT','GET','DELETE'])
 def view():
     # Get globals
@@ -139,7 +140,6 @@ def view():
         make_response(jsonify({'error': 'Server error'}), 500)
 
 
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 # HELPER FUNCTIONS:                  VECTOR CLOCKS COMPARISON     
@@ -147,13 +147,14 @@ def view():
 # ================================================================================================================
 
 
+# This function will update the replicas current position by 1
 def update_vector_clock():
     # Get globals
     global vector_clock
     # Update your socket address in vector clock
     vector_clock[my_socket_address] += 1
 
-# NOTE: VC2 is the vector_clock of the requesting client
+# This function will do preform a dependency test for a client NOTE: VC2 is the vector_clock of the requesting client
 def dependency_test_client(VC2): 
     # Get globals
     global vector_clock, shard_groups, shard_number
@@ -170,7 +171,7 @@ def dependency_test_client(VC2):
     
     return True
 
-# NOTE: VC2 is the vector_clock of the requesting replica and sender is the requesting replica socket-address
+# This function will do preform a dependency test for a client NOTE: VC2 is the vector_clock of the requesting replica and sender is the requesting replica socket-address
 def dependency_test_replica(VC2, sender): 
     # Get global
     global vector_clock, view_list
@@ -187,6 +188,7 @@ def dependency_test_replica(VC2, sender):
                 return False
     return True
 
+# This function will merge the vector clocks using point-wise maximum technique 
 def merge_vector_clocks(VC2):
     # Get globals
     global vector_clock
@@ -211,12 +213,14 @@ def merge_vector_clocks(VC2):
         vector_clock = merged_vc
 
 
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 # HELPER FUNCTIONS:            BROADCASTING KVS UPDATES WITHIN SHARD GROUPS
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
+
+
+# This function will broadcast a kvs update to everyone in the shard-group
 def broadcast_kvs(method, key, value=None):
     # Get globals
     global shard_groups, my_socket_address, shard_number
@@ -275,7 +279,8 @@ def broadcast_kvs(method, key, value=None):
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
 
-# PUT, GET, DELETE kvs/<key> endpoint
+
+# This endpoint handles all kvs operations
 @app.route('/kvs/<key>', methods=['PUT', 'GET','DELETE'])
 def put_key_value(key):
     # Get data from json
@@ -298,7 +303,7 @@ def put_key_value(key):
     # Process request
     return process_request(method, key, data)
 
-# Function to handle requests forwarded to other shard groups
+# This function acts as the proxy/forwarder to the correct shard group
 def handle_forwarded_request(method, key):
     # Make a response variable
     response = None
@@ -329,7 +334,7 @@ def handle_forwarded_request(method, key):
     
     return response.content, response.status_code, response.headers.items()
 
-# Function to handle request processing logic
+# This function handles the logic for kvs endpoint
 def process_request(method, key, data=None):
     # Get global
     global key_value_store, vector_clock
@@ -465,16 +470,15 @@ def process_request(method, key, data=None):
 #                                       /shard/ids endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
+
+
+# This endpoint handles all shard/ids operations
 @app.route('/shard/ids', methods=['GET'])
 def get_shard_ids():
-
     # Get globals
     global shard_groups
-
     # Make response
     return make_response(jsonify({'shard-ids': list(shard_groups.keys())}), 200)
-
-
 
 
 # ================================================================================================================
@@ -482,15 +486,15 @@ def get_shard_ids():
 #                                     /shard/node-shard-id endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
+
+
+# This endpoint handles all /shard/node-shard-id operations
 @app.route('/shard/node-shard-id', methods=['GET'])
 def get_node_shard_id():
     # Get globals
     global shard_number
-
     # Make respone
     return make_response(jsonify({'node-shard-id': shard_number}), 200)
-
-
 
 
 # ================================================================================================================
@@ -498,6 +502,9 @@ def get_node_shard_id():
 #                                      /shard/members/<ID> endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
+
+
+# This endpoint handles all /shard/members/<ID> operations
 @app.route('/shard/members/<ID>', methods=['GET'])
 def get_shard_members(ID):
 
@@ -519,13 +526,14 @@ def get_shard_members(ID):
         return make_response(jsonify({'error': 'No such shard ID exists'}), 404)
 
 
-
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                                   /shard/key-count/<ID> endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
+
+
+
 @app.route('/shard/key-count/<ID>', methods=['GET'])
 def get_key_count_at_ID(ID):
 
@@ -591,14 +599,10 @@ def get_key_count_at_ID(ID):
 
 @app.route('/key-count', methods=['GET'])
 def get_key_value_store_size():
-
     # Get globals
     global key_value_store
-
     # Return size of key-value-store
     return make_response(jsonify({'size': len(key_value_store)}), 200)
-
-
 
 
 # ================================================================================================================
@@ -606,6 +610,8 @@ def get_key_value_store_size():
 #                                    /shard/add-member/<ID> endpoint                 
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
+
+
 def broadcast_add_member(shard_id, socket_address):
 
     # Get globals
@@ -636,7 +642,6 @@ def broadcast_add_member(shard_id, socket_address):
         for replica in down_replicas:
             if replica != my_socket_address:
                 broadcast_view('DELETE', replica)
-
 
 @app.route('/shard/add-member/<ID>', methods=['PUT'])
 def add_member(ID):
@@ -699,7 +704,6 @@ def add_member(ID):
     # Make a response
     return make_response(jsonify({'result': 'node added to shard'}), 200)
 
-
 @app.route('/populate', methods=['PUT'])
 def populate():
     # if you get this route it means you're new and need the info for your shard group to participate
@@ -751,13 +755,12 @@ def populate():
     return make_response(jsonify({'result': f"Updated kvs & vc from {data.get('Replica')}"}))
 
 
-
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                                            /shard/reshard endpoint
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
+
 
 @app.route('/shard/reshard', methods=['PUT'])
 def reshard():
@@ -793,7 +796,6 @@ def reshard():
 
     # Make response
     return make_response(jsonify({"result": "resharded"}), 200)
-
 
 def start_reshard(new_shard_count):
     # Get globals 
@@ -882,7 +884,6 @@ def start_reshard(new_shard_count):
                 print(f'cannot send new data for reshard to {replica}: {e}')
                 #TODO: delete broadcast
 
-
 @app.route('/reshard-sheep', methods=['PUT'])
 def sheep_reshard():
     # Get globals
@@ -927,13 +928,13 @@ def get_kvs_vc():
     return make_response(jsonify({'kvs': key_value_store, 'vc': vector_clock}), 200)
 
 
-
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                                       INITIALIZE GLOABLS
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
+
+
 # Get environment variable for socket address 
 my_socket_address = os.getenv('SOCKET_ADDRESS')
 
@@ -981,13 +982,13 @@ else:
 hash_ring = ConsistentHashRing(view_list)
 
 
-
-
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
 #                              INITIALIZE ON STARTUP (ONLY BROADCAST YOUR VIEW) 
 # ----------------------------------------------------------------------------------------------------------------
 # ================================================================================================================
+
+
 broadcast_view('PUT', my_socket_address)
 
 
