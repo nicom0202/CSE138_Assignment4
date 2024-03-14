@@ -4,7 +4,6 @@ import hashlib
 import os
 import time
 import math
-from consistent_hash import ConsistentHashRing
 
 app = Flask(__name__)
 
@@ -807,9 +806,6 @@ def start_reshard(new_shard_count):
     # Get globals 
     global view_list, shard_groups, shard_count, hash_ring, shard_number, key_value_store
 
-    # Make a new hash_ring
-    hash_ring = ConsistentHashRing(view_list)
-
     # Make a local kvs copy that holds the entire store
     entire_kvs_copy = {}
 
@@ -920,7 +916,6 @@ def sheep_reshard():
     # Update shard-number & hash-ring
     # shard_number = view_list.index(my_socket_address) % shard_count 
     shard_number = get_shard_number(my_socket_address)
-    hash_ring = ConsistentHashRing(view_list)
 
     print(f"Shard sheep update: {shard_groups}")
     # Return response
@@ -984,8 +979,6 @@ else:
     shard_number = None
     print(f"No shard_count, I'm not apart of any shard group yet ...")
 
-# Create hash_ring
-hash_ring = ConsistentHashRing(view_list)
 
 
 # ================================================================================================================
