@@ -1,11 +1,15 @@
 from flask import Flask, make_response, jsonify, request
 import requests
+import hashlib
 import os
 import time
 import math
 from consistent_hash import ConsistentHashRing
 
 app = Flask(__name__)
+
+# TODO: when a replica goes down, we need to redistribute keys
+# NOTE: get rid of consistent hashing bc you wont have to redistrbibute keys when a replica dies
 
 
 # ================================================================================================================
@@ -40,7 +44,9 @@ def get_shard_number(replica):
 # This function will find the shard group that a key will be assigned to
 def get_key_shard_desination(key):
     global view_list, hash_ring, shard_count
-    return view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
+    key_hash = int(hashlib.md5(key.encode()).hexdigest(), 16)
+    return hash(key_hash) % shard_count
+    # return view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
 
 
 # ================================================================================================================
