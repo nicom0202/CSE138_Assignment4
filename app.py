@@ -42,10 +42,9 @@ def get_shard_number(replica):
 
 # This function will find the shard group that a key will be assigned to
 def get_key_shard_desination(key):
-    global view_list, hash_ring, shard_count
+    global shard_count
     key_hash = int(hashlib.md5(key.encode()).hexdigest(), 16)
     return hash(key_hash) % shard_count
-    # return view_list.index(hash_ring.hash_key_to_node(key)) % shard_count 
 
 
 # ================================================================================================================
