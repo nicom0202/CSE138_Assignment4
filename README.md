@@ -96,3 +96,22 @@ Now that everyone has the same ```view_list``` order, we then call a function ca
 We use a dictionary that holds a shard ID (aka integers from zero to shard-count) to hold lists of replica addresses. Each list represents a shard group.
 
 ### (5) Resharding Mechanism
+1. ``Logic of Implementation``:
+    - **(i)** A client will request a reshard to a replica, this replica will be known as the ``leader`` of the reshard process.
+    - **(ii)** The ``leader`` will check if that reshard is possible. 
+    - **(iii)** If the reshard is possible, the ``leader`` will then create the new shard-groups & call a function ``start_reshard()``
+    - **(vi)** The ``leader`` will then request each kvs portion & vector from each shard-group using a new endpoint called ```@app.route('/get-kvs-vc', methods=['GET'])``
+    - **(v)** The ``leader`` now contains the entire kvs, it then splits the kvs store into the new shard-cout. I hold this data by using a dictionary that holds dictionaries. Each key to a dictionary represents a shard group ID and the dictionary is the respective kvs portion that shard group will hold. The ``leader`` also merges all vector clocks so that it holds the casual history of all the shard groups.
+    - **(iv)** Finally the leader will send the new key value store portion, new vector clock, new shard-groups, & new shard-count to each replica respectively to an endpoint called ```@app.route('/reshard-sheep', methods=['PUT'])```
+    - **(iiv)** When a replica who is not the leader (we call these replicas ``sheep``), will unconditionally accept the new key value store, vector clock, shard-groups & shard-count. At this point every replica will be in new shard-groups, have a new shard-count & have the same vector clocks.
+
+2. ``Data structures used``:
+    - **(i)** Dictionary of lists to hold shard-groups
+    - **(ii)** Dictionary of dictionaries to holds partitioned key value store
+    - **(iii)** Dictionary for vector clocks
+
+3. ``Algorithms used``:
+    - **(i)** For-loops to get the entire key value store & partition it.
+
+4. ``Rationale``:
+    - **(i)** Although this is probably not the most effient way to do this, we were having trouble having everyone be a ``leader`` and have this be decentralized algorithm but we ran into a lot of issues. The biggest issue was the redistribution of keys. So instead we decided on a centralized approach and just have one replica organize the reshard.
