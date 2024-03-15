@@ -1,43 +1,43 @@
 # CSE138_Assignment4
 
 # Acknowledgements
-(1) Animesh Tiwary - We consulted on how to hash a key and map it to a shard group. He told us to use the hashlib library. 
+1. Animesh Tiwary - We consulted on how to hash a key and map it to a shard group. He told us to use the hashlib library. 
 
 # Citations 
 NOTE: We used (1) and (2) for ```get_shard_number(replica)``` & ```get_key_shard_desination(key)```.
-(1) Python Hashlib Library Docs - https://docs.python.org/3/library/hashlib.html
-(2) ChatGPT:
-        Question: how do I hash a key in python using hashlib library?
-        Answer: 
-                To hash a key in Python using the hashlib library, you typically follow these steps:
+1. Python Hashlib Library Docs - https://docs.python.org/3/library/hashlib.html
+2. ChatGPT:
+    - **Question** how do I hash a key in python using hashlib library?
+    - **Answer** 
+            To hash a key in Python using the hashlib library, you typically follow these steps:
 
-                Import the hashlib library.
-                Create a hash object using a specific hashing algorithm.
-                Update the hash object with the bytes of the key.
-                Retrieve the hexadecimal digest of the hash.
-                Here's a basic example using the MD5 hashing algorithm:
+            Import the hashlib library.
+            Create a hash object using a specific hashing algorithm.
+            Update the hash object with the bytes of the key.
+            Retrieve the hexadecimal digest of the hash.
+            Here's a basic example using the MD5 hashing algorithm:
 
-                python
-                Copy code
-                import hashlib
+            python
+            Copy code
+            import hashlib
 
-                key = "my_key"
-                hashed_key = int(hashlib.md5(key.encode()).hexdigest(), 16)
+            key = "my_key"
+            hashed_key = int(hashlib.md5(key.encode()).hexdigest(), 16)
 
-                print("MD5 Hashed key:", hashed_key)
-                In this example:
+            print("MD5 Hashed key:", hashed_key)
+            In this example:
 
-                hashlib.md5() creates a hash object using the MD5 hashing algorithm.
-                .encode() converts the string key to bytes because hashlib functions require bytes input.
-                .hexdigest() retrieves the hexadecimal digest of the hash.
-                You can replace md5 with other algorithms like sha256, sha1, etc., depending on your requirements.
+            hashlib.md5() creates a hash object using the MD5 hashing algorithm.
+            .encode() converts the string key to bytes because hashlib functions require bytes input.
+            .hexdigest() retrieves the hexadecimal digest of the hash.
+            You can replace md5 with other algorithms like sha256, sha1, etc., depending on your requirements.
 
 # Team Contributions
-(1) Nicolas Martinez:
+1. Nicolas Martinez:
                     (i)    ```/shard/key-count/<ID>```
                     (ii)   ```/shard/add-member/<ID>```
                     (iii)  ```/shard/reshard```
-(2) Matthew Rico:
+2. Matthew Rico:
                     (i)   Making shard groups on startup & hash functions
                     (ii)  ```/shard/ids```
                     (iii) ```/shard/node-shard-id```
