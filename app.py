@@ -141,7 +141,7 @@ def view():
             hash_ring.remove_node(socket_address)
             return make_response(jsonify({"result": "deleted"}), 200)
     else:
-        make_response(jsonify({'error': 'Server error'}), 500)
+        return make_response(jsonify({'error': 'Server error'}), 500)
 
 
 # ================================================================================================================
@@ -542,7 +542,7 @@ def get_shard_members(ID):
 def get_key_count_at_ID(ID):
 
     # Get globals
-    global key_value_store, shard_groups, view_list
+    global key_value_store, shard_groups, view_list, shard_count
     
     # Local variables
     response = None
@@ -557,8 +557,8 @@ def get_key_count_at_ID(ID):
         return make_response(jsonify({'error': 'No such shard ID exists'}), 404)
     
     # Check that ID is a valid shard group
-    if ID not in shard_groups:
-        make_response(jsonify({'error': 'Shard ID does not exist'}), 404)
+    if ID < 0 or ID >= shard_count:
+        return make_response(jsonify({'error': 'No such shard ID exists'}), 404)
 
     # Check if ID is my shard group
     if ID == shard_number:
