@@ -114,4 +114,4 @@ We use a dictionary that holds a shard ID (aka integers from zero to shard-count
     - **(i)** For-loops to get the entire key value store & partition it.
 
 4. ``Rationale``:
-    - **(i)** Although this is probably not the most effient way to do this, we were having trouble having everyone be a ``leader`` and have this be decentralized algorithm but we ran into a lot of issues. The biggest issue was the redistribution of keys. So instead we decided on a centralized approach and just have one replica organize the reshard.
+    - **(i)** Although this is probably not the most efficent way to do this, we were having trouble having everyone be a ``leader`` and have this be decentralized algorithm. The biggest issue was the redistribution of keys. So instead we decided on a centralized approach and just have one replica organize the reshard.
