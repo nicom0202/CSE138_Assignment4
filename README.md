@@ -63,6 +63,13 @@ Our approach to mapping a key to a shard group was in our ```get_key_shard_desin
                 key_hash = int(hashlib.md5(key.encode()).hexdigest(), 16)
                 return hash(key_hash) % shard_count
 
+1. Data structures used:
+    No data structures were used.
+    
+2. Algorithms used:
+    We used the hashlib MD5 Hash function that accepts a sequence of bytes and returns a 128 bit hash value. We also used ```.encode()``` to convert the string into bytes to be acceptable by hash function & ```.hexdigest()``` to return the encoded data in hexadecimal format. The ```int(..., 16)``` converts the hexidecimal string from ```.hexdigest()``` into an integer. Finally we use ```% shard-count``` to map this integer to one of the shard IDs.
+
+3. Rationale:
 
 
 ### (4) Approach to Divide Nodes into Shards
@@ -82,8 +89,9 @@ Now that everyone has the same ```view_list``` order, we then call a function ca
                     if shard_index not in shard_groups:
                         shard_groups[shard_index] = []
                     shard_groups[shard_index].append(replica_address)
+                
+                return shard_groups
 
 We use a dictionary that holds a shard ID (aka integers from zero to shard-count) to hold lists of replica addresses. Each list represents a shard group.
 
-    return shard_groups
 ### (5) Resharding Mechanism
