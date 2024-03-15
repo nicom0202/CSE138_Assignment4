@@ -1,12 +1,12 @@
 # CSE138_Assignment4
 
 # Acknowledgements
-    (1) Animesh Tiwary - We consulted on how to hash a key and map it to a shard group. He told us to use the hashlib library. 
+(1) Animesh Tiwary - We consulted on how to hash a key and map it to a shard group. He told us to use the hashlib library. 
 
 # Citations 
-    NOTE: We used (1) and (2) for ```get_shard_number(replica)``` & ```get_key_shard_desination(key)```.
-    (1) Python Hashlib Library Docs - https://docs.python.org/3/library/hashlib.html
-    (2) ChatGPT:
+NOTE: We used (1) and (2) for ```get_shard_number(replica)``` & ```get_key_shard_desination(key)```.
+(1) Python Hashlib Library Docs - https://docs.python.org/3/library/hashlib.html
+(2) ChatGPT:
         Question: how do I hash a key in python using hashlib library?
         Answer: 
                 To hash a key in Python using the hashlib library, you typically follow these steps:
