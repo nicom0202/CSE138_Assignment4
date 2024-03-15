@@ -7,8 +7,8 @@
 NOTE: We used (1) and (2) for ```get_shard_number(replica)``` & ```get_key_shard_desination(key)```.
 1. Python Hashlib Library Docs - https://docs.python.org/3/library/hashlib.html
 2. ChatGPT:
-    - **Question** how do I hash a key in python using hashlib library?
-    - **Answer** 
+    - **Question**: how do I hash a key in python using hashlib library?
+    - **Answer**: 
             To hash a key in Python using the hashlib library, you typically follow these steps:
 
             Import the hashlib library.
@@ -34,14 +34,14 @@ NOTE: We used (1) and (2) for ```get_shard_number(replica)``` & ```get_key_shard
 
 # Team Contributions
 1. Nicolas Martinez:
-                    (i)    ```/shard/key-count/<ID>```
-                    (ii)   ```/shard/add-member/<ID>```
-                    (iii)  ```/shard/reshard```
+                - (i)    ```/shard/key-count/<ID>```
+                - (ii)   ```/shard/add-member/<ID>```
+                - (iii)  ```/shard/reshard```
 2. Matthew Rico:
-                    (i)   Making shard groups on startup & hash functions
-                    (ii)  ```/shard/ids```
-                    (iii) ```/shard/node-shard-id```
-                    (vi)  ```/shard/members/<ID>```
+                - (i)   Making shard groups on startup & hash functions
+                - (ii)  ```/shard/ids```
+                - (iii) ```/shard/node-shard-id```
+                - (vi)  ```/shard/members/<ID>```
 
 ## Mechanism Description
 
