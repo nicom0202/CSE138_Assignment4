@@ -9,6 +9,7 @@ NOTE: We used (1) and (2) for ```get_shard_number(replica)``` & ```get_key_shard
 2. ChatGPT:
     - **Question**: how do I hash a key in python using hashlib library?
     - **Answer**: 
+
             To hash a key in Python using the hashlib library, you typically follow these steps:
 
             Import the hashlib library.
@@ -63,13 +64,13 @@ Our approach to mapping a key to a shard group was in our ```get_key_shard_desin
                 key_hash = int(hashlib.md5(key.encode()).hexdigest(), 16)
                 return hash(key_hash) % shard_count
 
-1. Data structures used:
+1. ``Data structures used``:
     No data structures were used.
 
-2. Algorithms used:
+2. ``Algorithms used``:
     We used the hashlib MD5 Hash function that accepts a sequence of bytes and returns a 128 bit hash value. We also used ```.encode()``` to convert the string into bytes to be acceptable by hash function & ```.hexdigest()``` to return the encoded data in hexadecimal format. The ```int(..., 16)``` converts the hexidecimal string from ```.hexdigest()``` into an integer. Finally we use ```% shard-count``` to map this integer to one of the shard IDs.
 
-3. Rationale:
+3. ``Rationale``:
     The rationale of doing this was to avoid using a Consistent Hashing approach because of the complexity of Consistent Hashing. The main reason for our simplier approach is to avoid having to remap keys when a replica goes down in Consistent Hashing. Using this method will always ensure that a key:value pair will get mapped to the same shard-group even if a replica goes down. Although more key:value pairs will have to be moved in a reshard, this approach allows us not to move key:value pairs everytime a replica goes down.
 
 ### (4) Approach to Divide Nodes into Shards
