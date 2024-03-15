@@ -34,14 +34,14 @@ NOTE: We used (1) and (2) for ```get_shard_number(replica)``` & ```get_key_shard
 
 # Team Contributions
 1. Nicolas Martinez:
-                - (i)    ```/shard/key-count/<ID>```
-                - (ii)   ```/shard/add-member/<ID>```
-                - (iii)  ```/shard/reshard```
+                - **(i)**    ```/shard/key-count/<ID>```
+                - **(ii)**   ```/shard/add-member/<ID>```
+                - **(iii)**  ```/shard/reshard```
 2. Matthew Rico:
-                - (i)   Making shard groups on startup & hash functions
-                - (ii)  ```/shard/ids```
-                - (iii) ```/shard/node-shard-id```
-                - (vi)  ```/shard/members/<ID>```
+                - **(i)**   Making shard groups on startup & hash functions
+                - **(ii)**  ```/shard/ids```
+                - **(iii)** ```/shard/node-shard-id```
+                - **(vi)**  ```/shard/members/<ID>```
 
 ## Mechanism Description
 
