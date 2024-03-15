@@ -7,9 +7,6 @@ import math
 
 app = Flask(__name__)
 
-# TODO: when a replica goes down, we need to redistribute keys
-# NOTE: get rid of consistent hashing bc you wont have to redistrbibute keys when a replica dies
-
 
 # ================================================================================================================
 # ----------------------------------------------------------------------------------------------------------------
@@ -68,7 +65,7 @@ def broadcast_view(method, replica_address):
                     if method == 'PUT':
                         requests.put(url, json=data, timeout=1)
                     elif method == 'DELETE':
-                        requests.delete(url, json=data, timeout=5)
+                        requests.delete(url, json=data, timeout=10)
                     else:
                         return make_response(jsonify({'error': 'Server error'}), 500)
                 except requests.exceptions.RequestException as e:
@@ -137,9 +134,13 @@ def view():
 
         # Check if socket-address exists in your view
         if socket_address in view_list and socket_address != my_socket_address:
+            bad_replica_group = get_shard_number(socket_address)
             view_list.remove(socket_address)
-            hash_ring.remove_node(socket_address)
+            if socket_address in shard_groups[bad_replica_group]:
+                shard_groups[bad_replica_group].remove(socket_address)
             return make_response(jsonify({"result": "deleted"}), 200)
+        
+        return make_response(jsonify({"error": "View has no such replica"}), 404)
     else:
         return make_response(jsonify({'error': 'Server error'}), 500)
 
@@ -227,7 +228,7 @@ def merge_vector_clocks(VC2):
 # This function will broadcast a kvs update to everyone in the shard-group
 def broadcast_kvs(method, key, value=None):
     # Get globals
-    global shard_groups, my_socket_address, shard_number
+    global shard_groups, my_socket_address, shard_number, view_list
 
     # Create a list to hold replicas that are down
     down_replicas = []
@@ -250,7 +251,10 @@ def broadcast_kvs(method, key, value=None):
                     headers = {'Replica': my_socket_address}
 
                     # Make request
-                    response = requests.put(url, json=data, headers=headers,timeout=5)
+                    if method == 'PUT':
+                        response = requests.put(url, json=data, headers=headers,timeout=10)
+                    elif method == 'DELETE':
+                        response = requests.delete(url, json=data, headers=headers,timeout=10)
 
                     # Dependencies are NOT met, sleep and try again
                     if response.status_code == 503:
@@ -272,8 +276,10 @@ def broadcast_kvs(method, key, value=None):
     if len(down_replicas) > 0 and len(view_list) != 1:
         for replica in down_replicas:
             if replica != my_socket_address:
+                if replica in view_list:
+                    view_list.remove(replica)
                 broadcast_view('DELETE', replica)
-    pass
+    
 
 
 
@@ -324,19 +330,21 @@ def handle_forwarded_request(method, key):
             if method == 'GET':
                 response = requests.get(url, json=request.get_json(silent=True))
             elif method == 'PUT':
-                response = requests.put(url, json=request.get_json(silent=True))
+                print(f"Trying to forward to {replica}")
+                response = requests.put(url, json=request.get_json(silent=True), timeout=10)
             elif method == 'DELETE':
                 response = requests.delete(url, json=request.get_json(silent=True))
             else:
                 return make_response(jsonify({'error': 'Server error'}), 500)
             # break out of loop
-            break
+            if response is not None:
+                return response.content, response.status_code, response.headers.items()
         except requests.exceptions.RequestException as e:
             # forwarding request failed & the shard-group will catch this error then tell everyone to delete this shard
             print(f'Forwarding request failed, could not connect to {replica}: {e}')
             continue
     
-    return response.content, response.status_code, response.headers.items()
+    return make_response(jsonify({'error': 'All replicas failed to respond'}), 503)
 
 # This function handles the logic for kvs endpoint
 def process_request(method, key, data=None):
@@ -349,7 +357,7 @@ def process_request(method, key, data=None):
     # Check if key belongs to my shard group
     if key_shard_destination != shard_number:
         return handle_forwarded_request(method, key)
-    
+    print(f"Not forwarding request, key_shard_destination: {key_shard_destination}")
     # Create a local status code variable 
     status_code = 0
 
@@ -372,9 +380,11 @@ def process_request(method, key, data=None):
 
         # Check header to see if request is from a client
         if 'Replica' not in request.headers:
+            print(f"Not from replica")
             dependency = dependency_test_client(causal_metadata)
             from_client = True
         else: # From a replica
+            print(f"From replica {request.headers.get('Replica')}")
             dependency = dependency_test_replica(causal_metadata, request.headers.get('Replica'))
 
         if dependency:    
@@ -396,6 +406,7 @@ def process_request(method, key, data=None):
 
             # Update vector clock & broadcast to everyone if from client
             if from_client:
+                print("from_client = True")
                 update_vector_clock()
                 broadcast_kvs('PUT', key, value)
 
@@ -467,6 +478,8 @@ def process_request(method, key, data=None):
             return make_response(jsonify({"result": "deleted", "causal-metadata": vector_clock}), 200)
         else:
             return make_response(jsonify({"error": "Causal dependencies not satisfied; try again later"}), 503)
+
+
 
 
 # ================================================================================================================
@@ -803,7 +816,7 @@ def reshard():
 
 def start_reshard(new_shard_count):
     # Get globals 
-    global view_list, shard_groups, shard_count, hash_ring, shard_number, key_value_store
+    global view_list, shard_groups, shard_count, shard_number, key_value_store
 
     # Make a local kvs copy that holds the entire store
     entire_kvs_copy = {}
@@ -849,7 +862,6 @@ def start_reshard(new_shard_count):
     for key, value in entire_kvs_copy.items():
         # Find out where this key:value will go 
         key_shard_destination = get_key_shard_desination(key)
-        # key_shard_destination = get_shard_group(hash_ring.hash_key_to_node(key))
         
         # Insert into correct partition
         partitioned_kvs[key_shard_destination][key] = value
@@ -888,7 +900,7 @@ def start_reshard(new_shard_count):
 @app.route('/reshard-sheep', methods=['PUT'])
 def sheep_reshard():
     # Get globals
-    global vector_clock, key_value_store, shard_groups, shard_count, shard_number, hash_ring
+    global vector_clock, key_value_store, shard_groups, shard_count, shard_number
 
     # Get data
     data =  request.get_json()
