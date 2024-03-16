@@ -138,6 +138,7 @@ def view():
             view_list.remove(socket_address)
             if socket_address in shard_groups[bad_replica_group]:
                 shard_groups[bad_replica_group].remove(socket_address)
+            print(f"New shard-groups: {shard_groups}")
             return make_response(jsonify({"result": "deleted"}), 200)
         
         return make_response(jsonify({"error": "View has no such replica"}), 404)
@@ -266,7 +267,7 @@ def broadcast_kvs(method, key, value=None):
                     # Unexpected behavior 
                     else:
                         # raise Exception
-                        raise Exception
+                        continue
                 except requests.exceptions.RequestException:
                     # Found down replica, delete from view list & add to down_replicas
                     down_replicas.append(replica)
@@ -276,8 +277,14 @@ def broadcast_kvs(method, key, value=None):
     if len(down_replicas) > 0 and len(view_list) != 1:
         for replica in down_replicas:
             if replica != my_socket_address:
+                bad_replica_group = get_shard_number(replica)
+
                 if replica in view_list:
                     view_list.remove(replica)
+
+                if replica in shard_groups[bad_replica_group]:
+                    shard_groups[bad_replica_group].remove(replica)
+                print(f"New shard-groups: {shard_groups}")
                 broadcast_view('DELETE', replica)
     
 
@@ -331,7 +338,7 @@ def handle_forwarded_request(method, key):
                 response = requests.get(url, json=request.get_json(silent=True))
             elif method == 'PUT':
                 print(f"Trying to forward to {replica}")
-                response = requests.put(url, json=request.get_json(silent=True), timeout=10)
+                response = requests.put(url, json=request.get_json(silent=True), timeout=30)
             elif method == 'DELETE':
                 response = requests.delete(url, json=request.get_json(silent=True))
             else:
@@ -339,6 +346,9 @@ def handle_forwarded_request(method, key):
             # break out of loop
             if response is not None:
                 return response.content, response.status_code, response.headers.items()
+            else:
+                time.sleep(1)
+                continue
         except requests.exceptions.RequestException as e:
             # forwarding request failed & the shard-group will catch this error then tell everyone to delete this shard
             print(f'Forwarding request failed, could not connect to {replica}: {e}')
@@ -347,7 +357,7 @@ def handle_forwarded_request(method, key):
     return make_response(jsonify({'error': 'All replicas failed to respond'}), 503)
 
 # This function handles the logic for kvs endpoint
-def process_request(method, key, data=None):
+def process_request(method, key, data):
     # Get global
     global key_value_store, vector_clock
 
@@ -380,7 +390,6 @@ def process_request(method, key, data=None):
 
         # Check header to see if request is from a client
         if 'Replica' not in request.headers:
-            print(f"Not from replica")
             dependency = dependency_test_client(causal_metadata)
             from_client = True
         else: # From a replica
