@@ -1,5 +1,61 @@
 # CSE138_Assignment4
 
+# Initial setup
+• Build your container image and tag it asg4img: 
+    ```$ docker build -t asg4img .```
+• Create a subnet called asg4net with IP range 10.10.0.0/16: 
+    ```$ docker network create --subnet=10.10.0.0/16 asg4net```
+
+# Run instances in the network
+```
+$ docker run --rm -p 8082:8090 --net=asg4net --ip=10.10.0.2 --name=alice -e=SHARD_COUNT=2
+    -e=SOCKET_ADDRESS=10.10.0.2:8090
+    -e=VIEW=10.10.0.2:8090,10.10.0.3:8090,10.10.0.4:8090,10.10.0.5:8090,10.10.0.6:8090,10.10.0.7:8090
+    asg4img
+```
+```
+$ docker run --rm -p 8083:8090 --net=asg4net --ip=10.10.0.3 --name=bob   -e=SHARD_COUNT=2
+    -e=SOCKET_ADDRESS=10.10.0.3:8090
+    -e=VIEW=10.10.0.2:8090,10.10.0.3:8090,10.10.0.4:8090,10.10.0.5:8090,10.10.0.6:8090,10.10.0.7:8090
+    asg4img
+```
+```
+$ docker run --rm -p 8084:8090 --net=asg4net --ip=10.10.0.4 --name=carol -e=SHARD_COUNT=2
+    -e=SOCKET_ADDRESS=10.10.0.4:8090
+    -e=VIEW=10.10.0.2:8090,10.10.0.3:8090,10.10.0.4:8090,10.10.0.5:8090,10.10.0.6:8090,10.10.0.7:8090
+    asg4img
+```
+```
+$ docker run --rm -p 8085:8090 --net=asg4net --ip=10.10.0.5 --name=dave  -e=SHARD_COUNT=2
+    -e=SOCKET_ADDRESS=10.10.0.5:8090
+    -e=VIEW=10.10.0.2:8090,10.10.0.3:8090,10.10.0.4:8090,10.10.0.5:8090,10.10.0.6:8090,10.10.0.7:8090
+    asg4img
+```
+```
+$ docker run --rm -p 8086:8090 --net=asg4net --ip=10.10.0.6 --name=erin  -e=SHARD_COUNT=2
+    -e=SOCKET_ADDRESS=10.10.0.6:8090
+    -e=VIEW=10.10.0.2:8090,10.10.0.3:8090,10.10.0.4:8090,10.10.0.5:8090,10.10.0.6:8090,10.10.0.7:8090
+    asg4img
+```
+```
+$ docker run --rm -p 8087:8090 --net=asg4net --ip=10.10.0.7 --name=frank -e=SHARD_COUNT=2
+    -e=SOCKET_ADDRESS=10.10.0.7:8090
+    -e=VIEW=10.10.0.2:8090,10.10.0.3:8090,10.10.0.4:8090,10.10.0.5:8090,10.10.0.6:8090,10.10.0.7:8090
+    asg4img
+```
+
+# Example PUT request
+Request:
+```
+$ curl --request PUT --header "Content-Type: application/json" --write-out "\n%{http_code}\n"
+    --data '{"value":"ice-cream","causal-metadata":<V1>}' http://<ALICE>/kvs/matcha
+```
+Reponse:
+```
+{"result": "created", "causal-metadata": <V2>, "shard-id": "oranges"}
+201
+```
+
 # Acknowledgements
 1. Animesh Tiwary - We consulted on how to hash a key and map it to a shard group. He told us to use the hashlib library. 
 
